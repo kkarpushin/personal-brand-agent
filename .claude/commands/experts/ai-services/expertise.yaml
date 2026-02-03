@@ -1,0 +1,153 @@
+# AI Services Expertise
+# Salesbooster - Conversation Analysis & Reply Generation
+#
+# Run /experts:ai-services:self-improve to sync with your codebase.
+
+overview:
+  description: "AI-powered conversation analysis, classification, and reply generation"
+  key_files:
+    - "services/conversation_analyzer/service.py"
+    - "services/reply_generator/service.py"
+    - "services/message_analyzer/"
+    - "services/ai_messages/"
+    - "services/knowledge/"
+
+core_implementation:
+  conversation_analyzer:
+    file: "services/conversation_analyzer/service.py"
+    class: "ConversationAnalyzerService"
+    purpose: "Analyze full conversation context for classification and next action"
+
+    inputs:
+      - "ConversationDB - conversation state"
+      - "List[MessageDB] - full message history"
+      - "ContactDB - lead profile"
+      - "sender_name - our rep's name"
+
+    outputs:
+      class: "ConversationAnalysisResult"
+      fields:
+        pipeline_stage: "PipelineStage (pipeline_id, status_id)"
+        next_action: "NextAction (action, delay, task_description)"
+        sentiment: "positive | neutral | negative"
+        lead_temperature: "cold | warm | hot"
+        summary: "Brief conversation summary"
+        key_points: "List of key discussion points"
+        suggested_reply: "Optional - for backward compat"
+
+    next_actions:
+      reply_now: "Respond immediately"
+      reply_later: "Schedule response with delay_days"
+      reply_and_close: "Final response, close conversation"
+      wait: "No action, await lead response"
+      close: "Close without response"
+      escalate: "Flag for human review"
+
+    knowledge_sources:
+      - "get_company_knowledge() - Company info, offerings"
+      - "get_sender_knowledge() - Rep's style and approach"
+      - "Kommo pipelines - Sales stages"
+
+  reply_generator:
+    file: "services/reply_generator/service.py"
+    class: "ReplyGeneratorService"
+    purpose: "Generate contextual replies to unanswered lead messages"
+
+    features:
+      - "Focuses on ALL unanswered lead messages, not just last"
+      - "RAG with vector embeddings for knowledge retrieval"
+      - "Full conversation context in JSON format"
+      - "Multi-language support"
+      - "Confidence scoring"
+
+    inputs:
+      - "ConversationDB"
+      - "List[MessageDB] - full history"
+      - "ContactDB"
+      - "analysis_result - from ConversationAnalyzer"
+
+    output:
+      content: "Generated reply text"
+      confidence: "0.0-1.0 confidence score"
+      language: "Detected conversation language"
+
+  message_analyzer:
+    directory: "services/message_analyzer/"
+    purpose: "Analyze individual message sentiment and intent"
+    outputs:
+      sentiment: "positive | neutral | negative"
+      intent: "question | interest | objection | acceptance | etc"
+      topics: "List of detected topics"
+
+  knowledge_service:
+    directory: "services/knowledge/"
+    purpose: "Provide context for AI generation"
+    functions:
+      - "get_company_knowledge() - Company description, products, pricing"
+      - "get_sender_knowledge() - Rep persona, communication style"
+
+data_classes:
+  PipelineStage:
+    fields: ["pipeline_id", "pipeline_name", "status_id", "status_name"]
+
+  NextAction:
+    fields:
+      action: "reply_now | reply_later | wait | close | escalate"
+      delay_days: "Optional int"
+      task_description: "Optional task text"
+      task_type: "follow_up | send_materials | schedule_meeting | check_status"
+      task_due_date: "ISO date YYYY-MM-DD"
+      urgency: "low | normal | high | urgent"
+      reason: "Explanation for the action"
+
+  ConversationAnalysisResult:
+    fields:
+      - "pipeline_stage: Optional[PipelineStage]"
+      - "next_action: NextAction"
+      - "sentiment: str"
+      - "lead_temperature: str"
+      - "summary: str"
+      - "key_points: List[str]"
+      - "suggested_reply: Optional[str]"
+
+ai_providers:
+  anthropic:
+    model: "claude-sonnet or claude-opus"
+    used_for: "Main analysis and reply generation"
+  openai:
+    model: "gpt-4 or gpt-3.5-turbo"
+    used_for: "Fallback and embeddings"
+
+prompt_construction:
+  system_prompt:
+    - "Company knowledge"
+    - "Sender knowledge"
+    - "Pipeline stages from Kommo"
+    - "Conversation guidelines"
+
+  user_prompt:
+    - "Full conversation history as JSON"
+    - "Contact profile data"
+    - "Current pipeline stage (if any)"
+    - "Specific analysis request"
+
+key_operations:
+  full_analysis:
+    method: "analyze_conversation(conversation, messages, contact, sender_name)"
+    returns: "ConversationAnalysisResult"
+
+  generate_reply:
+    method: "generate_reply(conversation, messages, contact, analysis_result)"
+    returns: "{content: str, confidence: float, language: str}"
+
+  analyze_single_message:
+    method: "MessageAnalyzer.analyze(message_text)"
+    returns: "{sentiment, intent, topics}"
+
+best_practices:
+  - "Always provide full conversation history, not just last message"
+  - "Include contact profile for personalization"
+  - "Use Kommo pipelines for accurate stage classification"
+  - "Generate tasks for follow-ups, not just replies"
+  - "Log AI model used and prompt IDs for debugging"
+  - "Handle API rate limits with tenacity retry"

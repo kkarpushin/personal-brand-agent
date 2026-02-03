@@ -1,0 +1,54 @@
+# Expert: [DOMAIN NAME]
+# Replace this template with your domain expertise
+# Run /experts:[domain]:self-improve to populate from your codebase
+
+overview:
+  description: "[Brief description of what this expert covers]"
+  key_files:
+    - "[path/to/main/file.py]"
+    - "[path/to/related/file.py]"
+
+core_implementation:
+  # Structure your domain knowledge here
+  # Example sections you might use:
+  #
+  # key_modules:
+  #   module_name:
+  #     file: "path/to/module.py"
+  #     purpose: "What this module does"
+  #     key_functions:
+  #       - function_name: "Brief description"
+  #
+  # data_flow:
+  #   - "Step 1: User action triggers..."
+  #   - "Step 2: Handler processes..."
+  #
+  # patterns:
+  #   pattern_name:
+  #     description: "What pattern this is"
+  #     example_location: "file.py:123"
+
+key_operations:
+  # Document important functions/methods
+  # Include file paths and line numbers for quick reference
+  #
+  # example_operation:
+  #   file: "module.py"
+  #   line: 42
+  #   description: "What this operation does"
+  #   dependencies:
+  #     - "other_module.function"
+
+best_practices:
+  - "[Practice 1: e.g., Always use X pattern for Y]"
+  - "[Practice 2: e.g., Validate inputs before Z]"
+
+known_issues:
+  - issue: "[Describe the issue]"
+    solution: "[How to handle it]"
+
+# IMPORTANT NOTES:
+# - Keep this file under 1000 lines for optimal performance
+# - This is a mental model, NOT documentation - be concise
+# - The code is the source of truth, this is your working memory
+# - Run self-improve regularly to keep in sync with codebase

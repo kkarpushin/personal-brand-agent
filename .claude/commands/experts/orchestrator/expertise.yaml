@@ -1,0 +1,134 @@
+# Orchestrator Expertise
+# Salesbooster - Central Workflow Coordinator
+#
+# Run /experts:orchestrator:self-improve to sync with your codebase.
+
+overview:
+  description: "Central coordinator that connects LinkedIn, AI, CRM, and notification services"
+  key_files:
+    - "core/orchestrator/orchestrator.py"
+    - "core/models/conversation.py"
+    - "core/models/message.py"
+    - "core/models/contact.py"
+    - "core/interfaces/"
+
+core_implementation:
+  orchestrator:
+    file: "core/orchestrator/orchestrator.py"
+    class: "Orchestrator"
+    purpose: "Coordinate all services into unified workflows"
+
+    dependencies:
+      linkedin: "HeyreachService or LinkedinDirectService"
+      kommo: "KommoCRMService"
+      calendly: "CalendlyService"
+      telegram: "TelegramService"
+      ai_analyzer: "ConversationAnalyzerService (instantiated on demand)"
+      ai_generator: "ReplyGeneratorService (instantiated on demand)"
+
+    event_handlers:
+      message_received: "_on_message_received"
+      message_sent: "_on_message_sent"
+      lead_replied: "_on_lead_replied"
+      connection_accepted: "_on_connection_accepted"
+      connection_requested: "_on_connection_requested"
+
+  event_routing:
+    method: "handle_heyreach_event(event_type, payload)"
+    supported_events:
+      - "message_received / message.received"
+      - "message_sent / message.sent"
+      - "lead_replied / lead.replied"
+      - "connection_accepted / connection.accepted"
+      - "connection_requested / connection.requested"
+      - "every_message_reply_received"
+      - "first_message_reply_received"
+      - "inmail_reply_received"
+      - "message_reply_received"
+
+workflows:
+  inbound_message:
+    trigger: "_on_message_received"
+    steps:
+      - "Save message to database (MessageDB)"
+      - "Update conversation state (ConversationDB)"
+      - "Run ConversationAnalyzerService.analyze_conversation()"
+      - "Determine pipeline stage and next action"
+      - "If action is reply_now: generate reply via ReplyGeneratorService"
+      - "Send reply via LinkedIn service"
+      - "Sync to Kommo CRM"
+      - "Send Telegram notification"
+
+  connection_accepted:
+    trigger: "_on_connection_accepted"
+    steps:
+      - "Create/update contact in database"
+      - "Create conversation record"
+      - "Generate first message"
+      - "Send via LinkedIn"
+      - "Create lead in Kommo"
+
+  meeting_booking:
+    trigger: "process_meeting_booking"
+    steps:
+      - "Receive Calendly webhook"
+      - "Find conversation by email"
+      - "Update MeetingDB status"
+      - "Update conversation to MEETING_SCHEDULED"
+      - "Send confirmation via LinkedIn"
+      - "Update Kommo pipeline stage"
+      - "Notify via Telegram"
+
+core_models:
+  conversation:
+    file: "core/models/conversation.py"
+    statuses:
+      - "NEW - Fresh conversation"
+      - "ACTIVE - Ongoing dialogue"
+      - "WAITING_REPLY - We sent, awaiting response"
+      - "REPLIED - Lead responded"
+      - "MEETING_SCHEDULED - Calendly booking"
+      - "QUALIFIED - Lead qualified"
+      - "NOT_INTERESTED - Lead declined"
+      - "CLOSED - Conversation ended"
+
+  message:
+    file: "core/models/message.py"
+    directions: ["INBOUND", "OUTBOUND"]
+    statuses: ["DRAFT", "PENDING", "SENT", "DELIVERED", "READ", "FAILED"]
+    types: ["connection_request", "first_message", "follow_up", "reply", "inmail"]
+
+  contact:
+    file: "core/models/contact.py"
+    sources: ["LinkedIn profile", "HeyReach", "Kommo CRM"]
+
+key_operations:
+  analyze_and_respond:
+    description: "Full pipeline for processing inbound message"
+    method: "_on_message_received"
+    calls:
+      - "ConversationAnalyzerService.analyze_conversation()"
+      - "ReplyGeneratorService.generate_reply() (if needed)"
+      - "linkedin.send_message()"
+      - "kommo.sync_conversation()"
+      - "telegram.notify()"
+
+  sync_to_crm:
+    description: "Sync conversation state to Kommo"
+    updates:
+      - "Pipeline stage based on analysis"
+      - "Custom fields (sentiment, temperature)"
+      - "Notes with conversation summary"
+
+service_factory:
+  purpose: "Lazy instantiation of services"
+  functions:
+    - "get_linkedin_service() - Returns HeyreachService or LinkedinDirectService"
+    - "ConversationAnalyzerService/ReplyGeneratorService instantiated per-request"
+
+best_practices:
+  - "Always save to database before external API calls"
+  - "Use structured logging with context (conversation_id, contact_id)"
+  - "Handle all event types - log unhandled ones"
+  - "Telegram notifications should never block main flow"
+  - "CRM sync errors should be logged but not fail the workflow"

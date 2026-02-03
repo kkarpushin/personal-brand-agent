@@ -1,0 +1,188 @@
+# Kommo CRM Expertise
+# Salesbooster - CRM Integration & Lead Management
+#
+# Run /experts:crm:self-improve to sync with your codebase.
+
+overview:
+  description: "Kommo CRM integration for lead management, pipeline tracking, and chat sync"
+  key_files:
+    - "services/kommo_crm/service.py"
+    - "services/kommo_crm/client.py"
+    - "services/kommo_crm/chats_client.py"
+    - "services/kommo_sync/"
+    - "core/interfaces/kommo_crm.py"
+
+core_implementation:
+  service:
+    file: "services/kommo_crm/service.py"
+    class: "KommoCRMService"
+    implements: "IKommoCRMService"
+    purpose: "Business logic for CRM operations"
+
+    contact_operations:
+      - "find_contact_by_linkedin(url) -> KommoContact"
+      - "find_contact_by_email(email) -> KommoContact"
+      - "create_contact(contact) -> KommoContact"
+      - "update_contact(kommo_id, data) -> KommoContact"
+      - "sync_contact(contact) -> KommoContact (upsert)"
+
+    lead_operations:
+      - "create_lead(contact, conversation) -> KommoLead"
+      - "update_lead(kommo_id, data) -> KommoLead"
+      - "move_to_stage(lead_id, pipeline_id, status_id)"
+      - "find_lead_by_contact(contact_id) -> KommoLead"
+
+    task_operations:
+      - "create_task(lead_id, text, due_at, type) -> KommoTask"
+      - "complete_task(task_id)"
+
+    note_operations:
+      - "add_note(entity_type, entity_id, text) -> KommoNote"
+
+  client:
+    file: "services/kommo_crm/client.py"
+    class: "KommoClient"
+    purpose: "Low-level Kommo REST API wrapper"
+
+    authentication:
+      type: "OAuth 2.0"
+      settings:
+        - "KOMMO_CLIENT_ID"
+        - "KOMMO_CLIENT_SECRET"
+        - "KOMMO_REDIRECT_URI"
+        - "KOMMO_ACCESS_TOKEN"
+        - "KOMMO_REFRESH_TOKEN"
+      token_refresh: "Automatic on 401"
+
+    endpoints:
+      contacts: "/api/v4/contacts"
+      leads: "/api/v4/leads"
+      tasks: "/api/v4/tasks"
+      notes: "/api/v4/leads/{id}/notes"
+      pipelines: "/api/v4/leads/pipelines"
+      custom_fields: "/api/v4/contacts/custom_fields"
+
+  chats_client:
+    file: "services/kommo_crm/chats_client.py"
+    purpose: "Kommo Chat API for message sync"
+    features:
+      - "Create chat channel for LinkedIn conversations"
+      - "Sync messages to Kommo chat"
+      - "Real-time chat integration"
+
+  sync_service:
+    directory: "services/kommo_sync/"
+    purpose: "Background sync daemon"
+    syncs:
+      - "Conversations to leads"
+      - "Messages to notes/chats"
+      - "Pipeline stages from analysis"
+
+data_models:
+  KommoContact:
+    fields:
+      - "id: str"
+      - "name: str"
+      - "first_name: Optional[str]"
+      - "last_name: Optional[str]"
+      - "custom_fields_values: List[dict]"
+    custom_fields:
+      - "LinkedIn URL"
+      - "Company"
+      - "Job Title"
+
+  KommoLead:
+    fields:
+      - "id: str"
+      - "name: str"
+      - "pipeline_id: int"
+      - "status_id: int"
+      - "contact_id: str"
+      - "custom_fields_values: List[dict]"
+
+  KommoTask:
+    fields:
+      - "id: str"
+      - "text: str"
+      - "complete_till: int (Unix timestamp)"
+      - "task_type_id: int"
+      - "entity_type: str"
+      - "entity_id: int"
+    task_types:
+      FOLLOW_UP: 1
+      MEETING: 2
+      CALL: 3
+
+  KommoNote:
+    fields:
+      - "id: str"
+      - "entity_id: int"
+      - "note_type: str"
+      - "text: str"
+
+pipelines:
+  purpose: "Sales funnel stages configured in Kommo"
+  cached_in: "ConversationAnalyzerService._pipelines_cache"
+  structure:
+    pipeline:
+      - "id: int"
+      - "name: str"
+      - "statuses: List[{id, name, sort}]"
+  common_stages:
+    - "New Lead"
+    - "Contacted"
+    - "Qualified"
+    - "Meeting Scheduled"
+    - "Proposal Sent"
+    - "Won / Lost"
+
+database_integration:
+  fields_in_ConversationDB:
+    - "kommo_lead_id: Optional[str]"
+    - "kommo_pipeline_id: Optional[int]"
+    - "kommo_stage_id: Optional[int]"
+    - "kommo_chat_id: Optional[str]"
+    - "kommo_synced_at: Optional[datetime]"
+
+  fields_in_ContactDB:
+    - "kommo_contact_id: Optional[str]"
+    - "kommo_lead_id: Optional[str]"
+
+key_operations:
+  sync_conversation:
+    description: "Full sync of conversation to Kommo"
+    steps:
+      - "Find or create contact by LinkedIn URL"
+      - "Find or create lead linked to contact"
+      - "Update pipeline stage from analysis"
+      - "Add note with conversation summary"
+      - "Create tasks if needed"
+      - "Update kommo_* fields in ConversationDB"
+
+  move_pipeline_stage:
+    description: "Update lead's pipeline stage"
+    method: "move_to_stage(lead_id, pipeline_id, status_id)"
+    triggered_by: "ConversationAnalyzerService result"
+
+  create_follow_up_task:
+    description: "Create task in Kommo"
+    method: "create_task(lead_id, text, due_at, TASK_TYPE_FOLLOW_UP)"
+    triggered_by: "NextAction with task_description"
+
+configuration:
+  env_variables:
+    - "KOMMO_CLIENT_ID - OAuth client ID"
+    - "KOMMO_CLIENT_SECRET - OAuth client secret"
+    - "KOMMO_REDIRECT_URI - OAuth redirect"
+    - "KOMMO_ACCESS_TOKEN - Current access token"
+    - "KOMMO_REFRESH_TOKEN - Refresh token"
+    - "KOMMO_SUBDOMAIN - Account subdomain"
+
+best_practices:
+  - "Always search for existing contact before creating"
+  - "Link leads to contacts for proper CRM structure"
+  - "Use pipeline stages from Kommo, not hardcoded"
+  - "Cache pipeline data to reduce API calls"
+  - "Handle token refresh automatically"
+  - "Log all CRM operations for debugging"
+  - "Never block main flow on CRM errors"

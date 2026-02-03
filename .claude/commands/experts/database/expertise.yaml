@@ -1,0 +1,180 @@
+# Database Implementation Expertise
+# Salesbooster - LinkedIn Automation & Lead Management
+#
+# Run /experts:database:self-improve to sync with your codebase.
+
+overview:
+  description: "SQLAlchemy 2.0 async database layer with repository pattern for LinkedIn automation"
+  database_system: "PostgreSQL (production) / SQLite (development)"
+  driver: "SQLAlchemy 2.0 async (aiosqlite for SQLite, asyncpg for PostgreSQL)"
+  orm_pattern: "Full SQLAlchemy ORM with declarative models and repository pattern"
+  schema_management: "Alembic migrations"
+
+core_implementation:
+  database_module:
+    file: "database/connection.py"
+    purpose: "Async engine creation, session factory, and connection management"
+
+    connection_setup:
+      engine: "create_async_engine with settings.database.url"
+      session_maker: "async_sessionmaker with expire_on_commit=False"
+      context_manager: "get_session() - auto-commit on success, rollback on error"
+
+    key_functions:
+      - "get_engine() - Lazy singleton engine creation"
+      - "async_session_maker() - Session factory singleton"
+      - "get_session() - Context manager for transactions"
+      - "init_db() - Create all tables from metadata"
+
+  data_models:
+    file: "database/models.py"
+    purpose: "SQLAlchemy ORM models with Mapped type annotations"
+    framework: "SQLAlchemy 2.0 declarative with Mapped columns"
+
+    core_models:
+      CampaignDB:
+        table: "campaigns"
+        purpose: "HeyReach campaign tracking"
+        key_fields: ["heyreach_id", "name", "total_contacts", "contacted", "replied"]
+        relationships: ["conversations"]
+
+      ContactDB:
+        table: "contacts"
+        purpose: "LinkedIn profile data and CRM integration"
+        key_fields:
+          - "heyreach_id, linkedin_url, linkedin_id"
+          - "first_name, last_name, full_name, headline, about"
+          - "company, company_url, job_title, location"
+          - "connections, followers (LinkedIn stats)"
+          - "kommo_contact_id, kommo_lead_id (CRM)"
+          - "upwork_job_* (Upwork integration)"
+          - "custom_fields, tags (JSON)"
+        relationships: ["conversations", "messages"]
+        indexes: ["linkedin_url", "email", "heyreach_id"]
+
+      ConversationDB:
+        table: "conversations"
+        purpose: "LinkedIn conversation state and AI analysis"
+        key_fields:
+          - "heyreach_id, contact_id, campaign_id"
+          - "sender_* (LinkedIn account details)"
+          - "status (ConversationStatusEnum)"
+          - "is_unread, is_group_chat, blocked_*"
+          - "total_messages, inbound_messages, outbound_messages"
+          - "last_message_at, last_message_direction, last_message_preview"
+          - "overall_sentiment, engagement_score, next_action (AI)"
+          - "kommo_lead_id, kommo_pipeline_id, kommo_stage_id, kommo_chat_id"
+        relationships: ["contact", "campaign", "messages"]
+        indexes: ["contact_id", "campaign_id", "last_message_at", "heyreach_campaign_id"]
+
+      MessageDB:
+        table: "messages"
+        purpose: "Individual LinkedIn messages with AI metadata"
+        key_fields:
+          - "heyreach_id, conversation_id, contact_id"
+          - "content, subject, post_link"
+          - "direction (MessageDirectionEnum)"
+          - "status (MessageStatusEnum)"
+          - "message_type, is_inmail, sender_type"
+          - "ai_generated, ai_model, ai_prompt_id"
+          - "sentiment, intent, topics (JSON)"
+          - "linkedin_message_id"
+          - "created_at, sent_at, read_at"
+        relationships: ["conversation", "contact"]
+        indexes: ["conversation_id", "contact_id", "created_at", "direction"]
+
+      TaskDB:
+        table: "tasks"
+        purpose: "Follow-up tasks (auto and manual)"
+        key_fields:
+          - "conversation_id, contact_id"
+          - "task_type (TaskTypeEnum)"
+          - "due_date, description, priority"
+          - "status (TaskStatusEnum)"
+          - "auto_close_on_reply, source"
+          - "source_quote, source_message_id"
+          - "notification_sent, notification_sent_at"
+        indexes: ["conversation_id", "contact_id", "due_date", "status", "auto_close_on_reply+status"]
+
+      MeetingDB:
+        table: "meetings"
+        purpose: "Calendly meeting tracking and handoff"
+        key_fields:
+          - "conversation_id, contact_id"
+          - "sales_manager_name, sales_manager_email"
+          - "calendly_event_id, calendly_event_uri, calendly_link_sent"
+          - "status (MeetingStatusEnum)"
+          - "booking_method (BookingMethodEnum)"
+          - "invitee_email, scheduled_at, completed_at"
+          - "available_slots (JSON for chat mode)"
+
+      PollingStateDB:
+        table: "polling_state"
+        purpose: "LinkedIn Direct message sync state"
+        key_fields:
+          - "account_id, conversation_urn"
+          - "last_message_timestamp (Unix ms)"
+          - "last_message_hash, messages_synced"
+        unique_index: ["account_id", "conversation_urn"]
+
+    enums:
+      MessageDirectionEnum: ["INBOUND", "OUTBOUND"]
+      MessageStatusEnum: ["DRAFT", "PENDING", "SENT", "DELIVERED", "READ", "FAILED"]
+      ConversationStatusEnum: ["NEW", "ACTIVE", "WAITING_REPLY", "REPLIED", "MEETING_SCHEDULED", "QUALIFIED", "NOT_INTERESTED", "CLOSED"]
+      MeetingStatusEnum: ["PROPOSED", "PENDING_EMAIL", "SCHEDULED", "CONFIRMED", "COMPLETED", "CANCELED", "NO_SHOW", "RESCHEDULED"]
+      TaskTypeEnum: ["AUTO_FOLLOWUP", "FOLLOW_UP", "SEND_MATERIALS", "SCHEDULE_MEETING", "CHECK_STATUS", "CUSTOM"]
+      TaskStatusEnum: ["PENDING", "COMPLETED", "CANCELLED", "AUTO_CLOSED"]
+
+  repositories:
+    file: "database/repositories.py"
+    purpose: "High-level data access layer with CRUD operations"
+
+    pattern:
+      - "Each repository takes AsyncSession in __init__"
+      - "Methods use SQLAlchemy select/update for queries"
+      - "get_or_create pattern returns (model, created_bool)"
+      - "flush() after create for immediate ID assignment"
+
+    classes:
+      ContactRepository:
+        methods: ["get_by_id", "get_by_heyreach_id", "get_by_linkedin_url", "create", "get_or_create", "update"]
+      ConversationRepository:
+        methods: ["get_by_id", "get_by_heyreach_id", "get_all", "create", "get_or_create", "update_message_stats", "count"]
+      MessageRepository:
+        methods: ["get_by_id", "get_by_heyreach_id", "get_by_conversation", "create", "get_or_create"]
+      TaskRepository:
+        methods: ["get_pending_tasks", "create", "complete", "cancel", "auto_close_for_conversation"]
+
+  migrations:
+    directory: "database/migrations/"
+    runner: "Alembic"
+    config: "alembic.ini"
+    command: "alembic upgrade head"
+
+key_operations:
+  connection:
+    init: "async with get_session() as session:"
+    acquire: "Session auto-created via context manager"
+    close: "Session auto-closed after context exit"
+
+  crud:
+    create: "repo.create(**kwargs) - creates and flushes"
+    read: "repo.get_by_id(id) / repo.get_by_heyreach_id(id)"
+    update: "repo.update(id, **kwargs) - updates and marks dirty"
+    upsert: "repo.get_or_create(id, **kwargs) - returns (model, created)"
+
+  patterns:
+    relationship_loading: "lazy='selectin' for async-safe eager loading"
+    counter_update: "conversation.total_messages += 1"
+    json_fields: "custom_fields, tags, topics stored as JSON type"
+    enum_storage: "Stored as String, enum values used in code"
+
+best_practices:
+  - "Always use async with get_session() for database operations"
+  - "Use repositories instead of direct session queries"
+  - "Flush after create to get auto-generated ID"
+  - "Use selectin for relationship loading (async-safe)"
+  - "Store JSON for flexible fields (custom_fields, tags, topics)"
+  - "Use UTC for all timestamps"
+  - "Index foreign keys and frequently filtered columns"
+  - "Keep this file under 1000 lines"

@@ -1,0 +1,132 @@
+# LinkedIn Integration Expertise
+# Salesbooster - Direct LinkedIn API & HeyReach Integration
+#
+# Run /experts:linkedin:self-improve to sync with your codebase.
+
+overview:
+  description: "LinkedIn messaging integration via direct API (primary) and HeyReach (legacy)"
+  key_files:
+    - "services/linkedin_direct/service.py"
+    - "services/linkedin_direct/client.py"
+    - "services/linkedin_direct/poller.py"
+    - "services/linkedin_direct/multi_poller.py"
+    - "services/heyreach/service.py"
+
+core_implementation:
+  linkedin_direct:
+    purpose: "Direct LinkedIn API integration - faster, free, full control"
+    advantages:
+      - "10-30 second latency (vs 1-5 min for HeyReach)"
+      - "No subscription cost"
+      - "Full control over data"
+    limitations:
+      - "No campaigns (HeyReach concept)"
+      - "No automatic sequences"
+      - "Requires cookies/credentials"
+
+    client:
+      file: "services/linkedin_direct/client.py"
+      purpose: "Low-level LinkedIn API wrapper using linkedin-api library"
+      authentication:
+        - "Email + Password + TOTP secret (2FA)"
+        - "Cookie-based auth (bypasses 2FA)"
+        - "Proxy support for security"
+      key_methods:
+        - "connect() - Initialize and authenticate"
+        - "get_conversations() - Fetch conversation list"
+        - "get_conversation_messages() - Get messages for a conversation"
+        - "send_message() - Send message to conversation"
+        - "get_profile() - Fetch contact profile data"
+
+    service:
+      file: "services/linkedin_direct/service.py"
+      purpose: "Business logic layer over LinkedIn client"
+      class: "LinkedinDirectService"
+      key_methods:
+        - "get_active_senders() - Get current LinkedIn accounts"
+        - "get_conversations() - List conversations"
+        - "get_messages() - Get messages for conversation"
+        - "send_message() - Send message"
+        - "get_contact() - Get contact profile"
+
+    poller:
+      file: "services/linkedin_direct/poller.py"
+      purpose: "Real-time message polling for single account"
+      interval: "15-30 seconds configurable"
+      workflow:
+        - "Poll LinkedIn for new conversations"
+        - "Detect new messages via timestamp comparison"
+        - "Trigger webhook-like events for new messages"
+        - "Store polling state in PollingStateDB"
+
+    multi_poller:
+      file: "services/linkedin_direct/multi_poller.py"
+      purpose: "Manage polling for multiple LinkedIn accounts"
+      features:
+        - "Concurrent polling for multiple accounts"
+        - "Account health monitoring"
+        - "Automatic reconnection on failure"
+
+    auth_2fa:
+      file: "services/linkedin_direct/auth_2fa.py"
+      purpose: "TOTP 2FA code generation"
+      library: "pyotp"
+
+  heyreach_legacy:
+    purpose: "Legacy HeyReach API integration - campaign-based automation"
+    file: "services/heyreach/service.py"
+    class: "HeyreachService"
+    key_methods:
+      - "get_campaigns() - List campaigns"
+      - "get_conversations() - Get campaign conversations"
+      - "get_messages() - Get conversation messages"
+      - "send_message() - Send message via HeyReach"
+    webhooks:
+      - "message_received"
+      - "lead_replied"
+      - "connection_accepted"
+      - "connection_requested"
+
+configuration:
+  env_variables:
+    direct:
+      - "LINKEDIN_EMAIL - Account email"
+      - "LINKEDIN_PASSWORD - Account password"
+      - "LINKEDIN_TOTP_SECRET - TOTP secret for 2FA"
+      - "LINKEDIN_COOKIES_PATH - Path to cookies file (optional)"
+      - "LINKEDIN_PROXY - Proxy URL (optional)"
+      - "LINKEDIN_ACCOUNT_NAME - Display name"
+      - "LINKEDIN_POLLING_INTERVAL - Polling interval in seconds"
+    heyreach:
+      - "HEYREACH_API_KEY - HeyReach API key"
+      - "HEYREACH_WEBHOOK_SECRET - Webhook signature secret"
+
+key_operations:
+  send_message:
+    direct: "LinkedinDirectService.send_message(conversation_urn, text)"
+    heyreach: "HeyreachService.send_message(lead_id, text)"
+
+  get_conversations:
+    direct: "LinkedinDirectService.get_conversations(offset, limit)"
+    heyreach: "HeyreachService.get_conversations(campaign_id, offset, limit)"
+
+  poll_for_new_messages:
+    file: "services/linkedin_direct/poller.py"
+    method: "LinkedinPoller.poll()"
+    stores_state_in: "PollingStateDB"
+
+data_flow:
+  inbound_message:
+    - "Poller detects new message via LinkedIn API"
+    - "Compare timestamp with PollingStateDB"
+    - "If new: trigger _on_message_received in orchestrator"
+    - "Message saved to MessageDB"
+    - "Conversation updated in ConversationDB"
+
+best_practices:
+  - "Use LinkedIn Direct for real-time messaging (15-30s latency)"
+  - "Keep HeyReach for campaign management only"
+  - "Store cookies for session persistence"
+  - "Use proxy to avoid rate limiting"
+  - "Monitor PollingStateDB for sync gaps"
+  - "Handle 2FA via TOTP secret, not manual codes"
