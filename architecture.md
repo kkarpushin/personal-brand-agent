@@ -6183,6 +6183,45 @@ def validate_writer_to_humanizer(draft: "DraftPost") -> None:
         raise BoundaryValidationError("Writer", "Humanizer", issues)
 
 
+def validate_humanizer_to_visual(post: "HumanizedPost") -> None:
+    """
+    FIX: Added - Validate Humanizer output before passing to Visual Creator.
+
+    Checks:
+    - visual_brief is present (required for image generation)
+    - visual_type is valid
+    - length_in_range is True
+    - hook_in_limit is True
+
+    Raises:
+        BoundaryValidationError: If validation fails
+    """
+    issues = []
+
+    # Visual brief is required for image generation
+    if not post.visual_brief:
+        issues.append("Missing visual_brief - Visual Creator cannot generate image")
+
+    # Visual type must be valid
+    valid_types = ["data_viz", "diagram", "screenshot", "quote_card", "author_photo", "carousel"]
+    if post.visual_type and post.visual_type not in valid_types:
+        issues.append(f"Invalid visual_type: {post.visual_type}. Must be one of {valid_types}")
+
+    # Length checks
+    if not post.length_in_range:
+        issues.append(f"Post length out of range: {post.character_count} chars")
+
+    if not post.hook_in_limit:
+        issues.append(f"Hook exceeds 210 char limit: {len(post.hook)} chars")
+
+    # Key terms for visual keywords
+    if not post.key_terms:
+        issues.append("Missing key_terms for visual keyword optimization")
+
+    if issues:
+        raise BoundaryValidationError("Humanizer", "VisualCreator", issues)
+
+
 def validate_visual_to_qc(
     visual: "VisualAsset",
     post: "HumanizedPost"
@@ -7707,9 +7746,11 @@ humanization_prompt_by_type = {
     - Match the tone to the content type
     - Don't add fake personal stories
     - Respect the source material
+    - PRESERVE LENGTH: Keep within 10% of original length (max 3000 chars)
+    - HOOK LIMIT: Keep hook (first line before line break) under 210 characters
 
     OUTPUT:
-    Return the humanized version of the post.
+    Return the humanized version of the post with preserved structure (hook, body, cta).
     """,
 
     ContentType.ENTERPRISE_CASE: """
@@ -7761,23 +7802,56 @@ humanization_prompt_by_type = {
 ```python
 @dataclass
 class HumanizedPost:
+    """
+    Output of Humanizer Agent.
+
+    FIX: Added fields to preserve DraftPost structure for downstream agents.
+    Visual Creator needs visual_brief, QC Agent needs length metrics.
+    """
     id: str
     original_draft_id: str
+    topic_id: str  # FIX: Added - traceability to original topic
     content_type: ContentType
 
-    # Content
-    humanized_text: str
+    # ─────────────────────────────────────────────────────────────────
+    # STRUCTURED CONTENT (FIX: preserve structure from DraftPost)
+    # ─────────────────────────────────────────────────────────────────
+    hook: str                    # Humanized first line (must fit in 210 chars)
+    body: str                    # Humanized main content
+    cta: str                     # Humanized call to action
+    hashtags: List[str]          # Preserved from DraftPost
+    humanized_text: str          # Full combined text (hook + body + cta + hashtags)
+
+    # ─────────────────────────────────────────────────────────────────
+    # LENGTH METRICS (FIX: added for QC validation)
+    # ─────────────────────────────────────────────────────────────────
+    character_count: int
+    hook_in_limit: bool          # Is hook under 210 chars?
+    length_in_range: bool        # Is total length in target range (1200-3000)?
+
+    # ─────────────────────────────────────────────────────────────────
+    # VISUAL BRIEF (FIX: preserve for Visual Creator)
+    # ─────────────────────────────────────────────────────────────────
+    visual_brief: str            # Description for image generation
+    visual_type: str             # data_viz / diagram / screenshot / quote_card
+    key_terms: List[str]         # For hashtag optimization and visual keywords
+
+    # ─────────────────────────────────────────────────────────────────
+    # TEMPLATE METADATA (FIX: preserve for analytics)
+    # ─────────────────────────────────────────────────────────────────
+    template_used: Optional[str] = None
+    hook_style: Optional[str] = None
 
     # Changes made
-    changes_log: List[str]  # What was changed and why
-    ai_patterns_removed: List[str]
-    human_markers_added: List[str]
-    type_specific_adjustments: List[str]  # What type-specific changes were made
+    changes_log: List[str] = field(default_factory=list)  # What was changed and why
+    ai_patterns_removed: List[str] = field(default_factory=list)
+    human_markers_added: List[str] = field(default_factory=list)
+    type_specific_adjustments: List[str] = field(default_factory=list)
 
-    # Quality metrics
-    humanness_score: float  # 0-10
-    voice_consistency_score: float  # 0-10
-    type_tone_match_score: float  # 0-10 (how well tone matches content type)
+    # Quality metrics (calculated by helper functions below)
+    humanness_score: float = 0.0       # 0-10
+    voice_consistency_score: float = 0.0  # 0-10
+    type_tone_match_score: float = 0.0    # 0-10 (how well tone matches content type)
 
     # ─────────────────────────────────────────────────────────────────
     # REVISION TRACKING (needed by QC Agent for max_revisions check)
@@ -7787,9 +7861,111 @@ class HumanizedPost:
     # Each entry: {"iteration": int, "target": str, "feedback": str, "timestamp": str}
 
     # Metadata
-    humanization_intensity_used: str  # low / medium / high
-    version: int
-    humanized_at: datetime
+    humanization_intensity_used: str = "medium"  # low / medium / high
+    version: int = 1
+    humanized_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HUMANIZATION QUALITY METRICS (FIX: Added missing calculation functions)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def calculate_humanness_score(
+    text: str,
+    ai_patterns_removed: List[str],
+    human_markers_added: List[str]
+) -> float:
+    """
+    Calculate humanness score (0-10) based on AI pattern removal and human marker addition.
+
+    Factors:
+    - Number of AI patterns found and removed (negative)
+    - Number of human markers successfully added (positive)
+    - Sentence length variation (positive)
+    - Use of contractions (positive)
+    """
+    import re
+
+    score = 7.0  # Base score
+
+    # Penalty for AI patterns found (even if removed)
+    score -= min(len(ai_patterns_removed) * 0.3, 2.0)
+
+    # Bonus for human markers added
+    score += min(len(human_markers_added) * 0.2, 1.5)
+
+    # Check for contractions (human writing uses them)
+    contractions = re.findall(r"\b\w+'(t|s|re|ve|ll|d|m)\b", text, re.IGNORECASE)
+    if len(contractions) >= 3:
+        score += 0.5
+
+    # Check sentence length variation
+    sentences = re.split(r'[.!?]+', text)
+    if len(sentences) > 3:
+        lengths = [len(s.split()) for s in sentences if s.strip()]
+        if lengths:
+            variance = max(lengths) - min(lengths)
+            if variance >= 5:  # Good variation
+                score += 0.5
+
+    return max(0.0, min(10.0, score))
+
+
+def calculate_voice_consistency_score(
+    text: str,
+    author_phrases: List[str],
+    author_opinions: List[str]
+) -> float:
+    """
+    Calculate voice consistency score (0-10) based on author profile match.
+
+    Factors:
+    - Use of author's unique phrases
+    - Consistency with author's typical opinions/takes
+    - Absence of phrases author would never use
+    """
+    score = 7.0  # Base score
+
+    text_lower = text.lower()
+
+    # Check for author's unique phrases
+    phrases_found = sum(1 for phrase in author_phrases if phrase.lower() in text_lower)
+    score += min(phrases_found * 0.5, 1.5)
+
+    # Check for author's opinions/style markers
+    opinions_found = sum(1 for opinion in author_opinions if opinion.lower() in text_lower)
+    score += min(opinions_found * 0.3, 1.0)
+
+    return max(0.0, min(10.0, score))
+
+
+def calculate_type_tone_match_score(
+    text: str,
+    content_type: "ContentType",
+    tone_config: Dict[str, Any]
+) -> float:
+    """
+    Calculate type-tone match score (0-10) based on content type requirements.
+
+    Each content type has expected tone markers that should be present.
+    """
+    score = 7.0  # Base score
+
+    expected_markers = tone_config.get("markers_to_add", [])
+    text_lower = text.lower()
+
+    # Check for expected tone markers
+    markers_found = sum(1 for marker in expected_markers if marker.lower() in text_lower)
+    if expected_markers:
+        match_ratio = markers_found / len(expected_markers)
+        score += match_ratio * 2.0  # Up to +2.0 for full match
+
+    # Penalty for inappropriate markers
+    avoid_markers = tone_config.get("markers_to_avoid", [])
+    bad_markers = sum(1 for marker in avoid_markers if marker.lower() in text_lower)
+    score -= bad_markers * 0.5
+
+    return max(0.0, min(10.0, score))
 ```
 
 ---
