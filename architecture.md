@@ -417,6 +417,18 @@ class SupabaseDB:
         result = await self.client.rpc("get_average_qc_score").execute()
         return result.data[0]["avg_score"] if result.data else 7.0
 
+    async def get_percentile(self, likes: int, minutes_after_post: int) -> float:
+        """
+        Calculate percentile rank for a post's likes at a given time checkpoint.
+
+        Returns what percent of posts this one outperformed (e.g., 90 = top 10%).
+        """
+        result = await self.client.rpc(
+            "get_likes_percentile",
+            {"likes_count": likes, "minutes": minutes_after_post}
+        ).execute()
+        return result.data[0]["percentile"] if result.data else 50.0
+
     # ─────────────────────────────────────────────────────────────────────
     # LEARNINGS (Continuous Learning Engine)
     # ─────────────────────────────────────────────────────────────────────
@@ -1231,6 +1243,19 @@ BEGIN
     SELECT AVG(qc_score)::FLOAT as avg_score
     FROM posts
     WHERE qc_score IS NOT NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Percentile rank for likes at a given time checkpoint
+-- Returns what percent of posts this one outperformed (e.g., 90 = top 10%)
+CREATE OR REPLACE FUNCTION get_likes_percentile(likes_count INTEGER, minutes INTEGER)
+RETURNS TABLE (percentile FLOAT) AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        (COUNT(*) FILTER (WHERE likes < likes_count)::FLOAT / NULLIF(COUNT(*), 0) * 100)::FLOAT as percentile
+    FROM post_metrics
+    WHERE minutes_after_post = minutes;
 END;
 $$ LANGUAGE plpgsql;
 
@@ -12730,10 +12755,17 @@ class PostPerformance:
     # ─────────────────────────────────────────────────────────────────
     # FEEDBACK LOOP ANALYSIS
     # ─────────────────────────────────────────────────────────────────
-    def qc_vs_performance_correlation(self) -> Dict[str, float]:
+    def qc_vs_performance_correlation(self) -> Dict[str, Union[float, bool]]:
         """
         Calculate correlation between QC scores and actual performance.
         Used for QC calibration.
+
+        Returns:
+            Dict with:
+            - qc_score: float - the QC score for this post
+            - actual_engagement: float - weighted engagement (likes + comments*3)
+            - over_predicted: bool - True if QC predicted high but performance was low
+            - under_predicted: bool - True if QC predicted low but performance was high
         """
         if not self.metrics_final:
             return {}
@@ -13057,6 +13089,42 @@ class LinkedInMetricsCollector:
         # Password goes out of scope here - not stored!
         self.logger.info(f"Successfully authenticated to LinkedIn as {email}")
 
+    def _calc_minutes_since_publish(self, post: Dict[str, Any]) -> int:
+        """
+        Calculate minutes since post was published.
+
+        Handles multiple timestamp formats from LinkedIn API.
+        """
+        # LinkedIn API provides timestamp in various formats
+        published_at = (
+            post.get('createdAt') or
+            post.get('created_at') or
+            post.get('timestamp')
+        )
+
+        if not published_at:
+            self.logger.warning("No publish timestamp found in post data, returning 0")
+            return 0
+
+        # Handle millisecond timestamps from LinkedIn
+        if isinstance(published_at, (int, float)):
+            # LinkedIn often uses milliseconds
+            if published_at > 1e12:
+                published_at = published_at / 1000
+            published_dt = datetime.fromtimestamp(published_at, tz=timezone.utc)
+        elif isinstance(published_at, str):
+            published_dt = datetime.fromisoformat(published_at.replace('Z', '+00:00'))
+        else:
+            published_dt = published_at
+
+        # Ensure timezone-aware
+        now = datetime.now(timezone.utc)
+        if published_dt.tzinfo is None:
+            published_dt = published_dt.replace(tzinfo=timezone.utc)
+
+        delta = now - published_dt
+        return max(0, int(delta.total_seconds() / 60))
+
     @with_retry(
         max_attempts=3,
         base_delay=5.0,
@@ -13168,7 +13236,7 @@ class LinkedInMetricsCollector:
             self.logger.error(f"LinkedIn API error for {method_name}: {e}")
             raise LinkedInAPIError(f"{method_name} failed: {e}")
 
-    @with_retry(component="linkedin", operation="publish_post")
+    @with_retry(component="linkedin", operation_name="publish_post")
     def publish_post(
         self,
         text: str,
@@ -13281,6 +13349,8 @@ class LinkedInMetricsCollector:
 
 ```python
 import asyncio
+from datetime import datetime, timedelta
+from typing import List, Tuple
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 class MetricsScheduler:
@@ -13388,7 +13458,9 @@ class MetricsScheduler:
         actual_minutes = snapshot.minutes_since_publish
         snapshot.collection_drift_seconds = (actual_minutes - scheduled_minutes) * 60
 
-        await self.db.store_snapshot(snapshot)
+        # Convert dataclass to dict for SupabaseDB method
+        from dataclasses import asdict
+        await self.db.store_metrics_snapshot(asdict(snapshot))
 
         # Check for alerts
         # FIX: Use scheduled_minutes, not undefined 'minutes' variable
