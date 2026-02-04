@@ -384,7 +384,17 @@ class SupabaseDB:
 
     async def store_metrics_snapshot(self, snapshot: Dict[str, Any]) -> str:
         """Store a metrics snapshot for a post."""
+        # FIX-023: Input validation
+        if not snapshot:
+            raise ValidationError("snapshot cannot be None or empty")
+        if "post_id" not in snapshot:
+            raise ValidationError("snapshot must have 'post_id'")
+
         result = await self.client.table("post_metrics").insert(snapshot).execute()
+
+        # FIX-023b: Response validation
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
     async def get_metrics_history(
@@ -502,7 +512,18 @@ class SupabaseDB:
 
     async def save_modification(self, modification: Dict[str, Any]) -> str:
         """Save a code modification record."""
+        # FIX-023: Input validation
+        if not modification:
+            raise ValidationError("modification cannot be None or empty")
+        required_fields = {"component", "modification_type", "before_state", "after_state"}
+        missing = required_fields - set(modification.keys())
+        if missing:
+            raise ValidationError(f"modification missing required fields: {missing}")
+
         result = await self.client.table("code_modifications").insert(modification).execute()
+
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
     async def get_modification(self, modification_id: str) -> Optional[Dict[str, Any]]:
@@ -517,6 +538,12 @@ class SupabaseDB:
 
     async def update_modification(self, modification: Dict[str, Any]) -> None:
         """Update modification status."""
+        # FIX-023: Input validation - must have 'id' for update
+        if not modification:
+            raise ValidationError("modification cannot be None or empty")
+        if "id" not in modification:
+            raise ValidationError("modification must have 'id' for update")
+
         await self.client.table("code_modifications").update(modification).eq("id", modification["id"]).execute()
 
     async def get_modifications(self, days: int = 30) -> List[Dict[str, Any]]:
@@ -537,7 +564,18 @@ class SupabaseDB:
 
     async def save_experiment(self, experiment: Dict[str, Any]) -> str:
         """Save an experiment."""
+        # FIX-023: Input validation
+        if not experiment:
+            raise ValidationError("experiment cannot be None or empty")
+        required_fields = {"name", "hypothesis", "variants"}
+        missing = required_fields - set(experiment.keys())
+        if missing:
+            raise ValidationError(f"experiment missing required fields: {missing}")
+
         result = await self.client.table("experiments").insert(experiment).execute()
+
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
     async def get_experiment(self, experiment_id: str) -> Optional[Dict[str, Any]]:
@@ -552,6 +590,12 @@ class SupabaseDB:
 
     async def update_experiment(self, experiment: Dict[str, Any]) -> None:
         """Update experiment."""
+        # FIX-023: Input validation - must have 'id' for update
+        if not experiment:
+            raise ValidationError("experiment cannot be None or empty")
+        if "id" not in experiment:
+            raise ValidationError("experiment must have 'id' for update")
+
         await self.client.table("experiments").update(experiment).eq("id", experiment["id"]).execute()
 
     async def get_active_experiments(self) -> List[Dict[str, Any]]:
@@ -570,7 +614,18 @@ class SupabaseDB:
 
     async def save_research_report(self, report: Dict[str, Any]) -> str:
         """Save a research report."""
+        # FIX-023: Input validation
+        if not report:
+            raise ValidationError("report cannot be None or empty")
+        required_fields = {"trigger", "findings"}
+        missing = required_fields - set(report.keys())
+        if missing:
+            raise ValidationError(f"report missing required fields: {missing}")
+
         result = await self.client.table("research_reports").insert(report).execute()
+
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
     async def get_last_research_date(self) -> Optional[datetime]:
@@ -690,7 +745,18 @@ class SupabaseDB:
 
     async def save_photo_metadata(self, metadata: Dict[str, Any]) -> str:
         """Save new photo metadata."""
+        # FIX-023: Input validation
+        if not metadata:
+            raise ValidationError("metadata cannot be None or empty")
+        required_fields = {"filename", "storage_path"}
+        missing = required_fields - set(metadata.keys())
+        if missing:
+            raise ValidationError(f"metadata missing required fields: {missing}")
+
         result = await self.client.table("author_photos").insert(metadata).execute()
+
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
     # ─────────────────────────────────────────────────────────────────────
@@ -699,7 +765,16 @@ class SupabaseDB:
 
     async def save_draft(self, draft: Dict[str, Any]) -> str:
         """Save a draft post."""
+        # FIX-023: Input validation
+        if not draft:
+            raise ValidationError("draft cannot be None or empty")
+        if "content" not in draft:
+            raise ValidationError("draft must have 'content'")
+
         result = await self.client.table("drafts").insert(draft).execute()
+
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
     async def get_draft(self, draft_id: str) -> Optional[Dict[str, Any]]:
@@ -714,6 +789,12 @@ class SupabaseDB:
 
     async def update_draft(self, draft: Dict[str, Any]) -> None:
         """Update a draft."""
+        # FIX-023: Input validation - must have 'id' for update
+        if not draft:
+            raise ValidationError("draft cannot be None or empty")
+        if "id" not in draft:
+            raise ValidationError("draft must have 'id' for update")
+
         await self.client.table("drafts").update(draft).eq("id", draft["id"]).execute()
 
 
@@ -724,11 +805,19 @@ class SupabaseDB:
 
 # Singleton pattern - one async connection for entire application
 _db_instance: Optional[SupabaseDB] = None
-_db_lock = asyncio.Lock()
+_db_lock: Optional[asyncio.Lock] = None  # FIX-013: Lazy initialization to avoid event loop binding issues
 
 async def get_db() -> SupabaseDB:
-    """Get the global async database instance (lazy initialization)."""
-    global _db_instance
+    """
+    Get the global async database instance (thread-safe, async-safe).
+    FIX-013: Lock is created lazily to avoid event loop binding issues.
+    """
+    global _db_instance, _db_lock
+
+    # Lazy lock creation in current event loop
+    if _db_lock is None:
+        _db_lock = asyncio.Lock()
+
     if _db_instance is None:
         async with _db_lock:
             # Double-check after acquiring lock
@@ -1417,6 +1506,7 @@ import subprocess
 import json
 import tempfile
 import os
+import threading  # FIX-001: Required for _claude_cli_lock
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass
@@ -4589,6 +4679,33 @@ class HookStyle(Enum):
     COMPARISON = "comparison"                # Compare to alternatives
     FIRST_LOOK = "first_look"                # "I tested it" angle
     IMPLICATIONS = "implications"            # "What this means for X"
+
+
+class VisualType(str, Enum):
+    """
+    FIX-025: Types of visual content for posts.
+    Replace hardcoded strings with enum for type safety.
+    """
+    DATA_VIZ = "data_viz"
+    DIAGRAM = "diagram"
+    SCREENSHOT = "screenshot"
+    QUOTE_CARD = "quote_card"
+    AUTHOR_PHOTO = "author_photo"
+    CAROUSEL = "carousel"
+    INTERFACE_VISUAL = "interface_visual"
+    BEFORE_AFTER = "before_after"
+
+    @classmethod
+    def for_content_type(cls, content_type: ContentType) -> List["VisualType"]:
+        """Get recommended visual types for a content type."""
+        mapping = {
+            ContentType.ENTERPRISE_CASE: [cls.DATA_VIZ, cls.QUOTE_CARD, cls.SCREENSHOT],
+            ContentType.PRIMARY_SOURCE: [cls.DATA_VIZ, cls.DIAGRAM, cls.QUOTE_CARD],
+            ContentType.AUTOMATION_CASE: [cls.DIAGRAM, cls.SCREENSHOT, cls.BEFORE_AFTER],
+            ContentType.COMMUNITY_CONTENT: [cls.AUTHOR_PHOTO, cls.QUOTE_CARD, cls.CAROUSEL],
+            ContentType.TOOL_RELEASE: [cls.SCREENSHOT, cls.INTERFACE_VISUAL, cls.DIAGRAM],
+        }
+        return mapping.get(content_type, [cls.AUTHOR_PHOTO])
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -8407,7 +8524,7 @@ class PhotoLibrary:
         if photo_id in self._cache:
             photo = self._cache[photo_id]
             photo.times_used += 1
-            photo.last_used_date = datetime.now()
+            photo.last_used_date = utc_now()  # FIX-024: Use timezone-aware datetime
             photo.last_used_post_id = post_id
 
         await self.db.update_photo_usage(photo_id, post_id)
@@ -8415,6 +8532,60 @@ class PhotoLibrary:
     def get_by_id(self, photo_id: str) -> Optional[PhotoMetadata]:
         """Get photo by ID from cache."""
         return self._cache.get(photo_id)
+
+    async def search(
+        self,
+        settings: List[str] = None,
+        poses: List[str] = None,
+        attire: List[str] = None,
+        exclude_recently_used: bool = True
+    ) -> List[PhotoMetadata]:
+        """
+        FIX-011: Search photos by criteria. Method was called but never defined.
+
+        Args:
+            settings: Filter by photo settings (e.g., ["office", "outdoor"])
+            poses: Filter by poses (e.g., ["standing", "seated"])
+            attire: Filter by attire (e.g., ["business", "casual"])
+            exclude_recently_used: Exclude photos used in recent posts
+
+        Returns:
+            List of matching photos sorted by relevance
+        """
+        await self.load()
+        candidates = list(self._cache.values())
+
+        # Filter out disabled photos
+        candidates = [p for p in candidates if not p.disabled]
+
+        # Filter by settings
+        if settings and "any" not in settings:
+            candidates = [p for p in candidates if getattr(p, 'setting', None) in settings]
+
+        # Filter by poses
+        if poses and "any" not in poses:
+            candidates = [p for p in candidates if getattr(p, 'pose', None) in poses]
+
+        # Filter by attire
+        if attire and "any" not in attire:
+            candidates = [p for p in candidates if getattr(p, 'attire', None) in attire]
+
+        # Exclude recently used
+        if exclude_recently_used:
+            recent_ids = await self._get_recent_photo_ids(5)
+            candidates = [p for p in candidates if p.id not in recent_ids]
+
+        # Sort by usage (prefer less used) and favorites first
+        candidates.sort(key=lambda p: (-p.favorite, p.times_used))
+
+        return candidates
+
+    @property
+    def recent_used_ids(self) -> set:
+        """FIX-011b: Property for recently used photo IDs (sync version for quick access)."""
+        # Note: This is a sync property that returns cached recent IDs
+        # For fresh data, use _get_recent_photo_ids()
+        return getattr(self, '_recent_ids_cache', set())
 ```
 
 ---
@@ -9040,18 +9211,21 @@ async def generate_interface_visual(
         start_time = datetime.now()
 
         try:
-            # FIX #15: Add timeout to generation
+            # FIX-012: Use the actual generate() method which IS defined
+            # Also fix deprecated get_event_loop() usage
+            prompt = f"""Create an interface visual for {product_category}.
+Purpose: {visual_brief}
+Context: {post_content[:500]}
+Style: Clean, professional UI screenshot style"""
+
             diagram = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None,  # Default executor
-                    lambda: nano_banana.generate_contextual_image(
-                        article_content=post_content,
-                        research_data={"product_category": product_category},
-                        diagram_purpose=visual_brief,
-                        diagram_type="interface_visual"
-                    )
+                nano_banana.generate(
+                    prompt=prompt,
+                    style="interface",
+                    size="1200x627",
+                    timeout=timeout_seconds
                 ),
-                timeout=timeout_seconds
+                timeout=timeout_seconds + 5  # Small buffer for overhead
             )
 
             generation_duration = (datetime.now() - start_time).total_seconds()
@@ -9708,8 +9882,8 @@ Check quality of final content using **content-type-aware scoring rubrics**. Dif
 │              ▼               ▼               ▼                             │
 │       ┌──────────┐    ┌──────────┐    ┌──────────┐                        │
 │       │   PASS   │    │  REVISE  │    │  REJECT  │                        │
-│       │ Score≥7.5│    │Score 5.5-│    │ Score<5.5│                        │
-│       │          │    │   7.5    │    │          │                        │
+│       │ Score≥8.0│    │Score 5.5-│    │ Score<5.5│                        │
+│       │          │    │   8.0    │    │          │                        │
 │       └────┬─────┘    └────┬─────┘    └────┬─────┘                        │
 │            │               │               │                               │
 │            ▼               ▼               ▼                               │
@@ -10482,7 +10656,7 @@ class ContentEvaluation:
             weaknesses=weaknesses,
             actionable_suggestions=suggestions,
             decision=decision,
-            evaluated_at=datetime.now(),
+            evaluated_at=utc_now(),  # FIX-024: Use timezone-aware datetime
             evaluator_model=evaluator_model,
             threshold_used=threshold,
             weights_used={cf.criterion: cf.weight for cf in criterion_feedback.values()}
@@ -10616,7 +10790,7 @@ class ApprovedPost:
             revision_count=state.get("revision_count", 0),
             approval_type=approval_type,
             approved_by=approved_by,
-            approved_at=datetime.now(),
+            approved_at=utc_now(),  # FIX-024: Use timezone-aware datetime
             pipeline_run_id=state["run_id"],
             topic_id=state["selected_topic"].id,
             draft_id=state["draft_post"].id,
@@ -11317,7 +11491,7 @@ class PipelineRecoveryManager:
         # Query checkpointer for recent runs
         from datetime import timedelta
 
-        cutoff = datetime.now() - timedelta(hours=hours_back)
+        cutoff = utc_now() - timedelta(hours=hours_back)  # FIX-024: Use timezone-aware datetime
         recoverable = []
 
         # Get all thread_ids (run_ids) from checkpointer
@@ -11464,14 +11638,22 @@ def get_recovery_manager() -> PipelineRecoveryManager:
     return _recovery_manager
 
 
+@with_error_handling(node_name="manual_review_queue")
+@with_timeout(node_name="manual_review_queue")
 async def queue_for_manual_review(state: PipelineState) -> Dict[str, Any]:
     """
+    FIX-028: Added missing decorators for consistency with other nodes.
     Queue post for manual human review.
     Used when max revisions reached but quality still below threshold.
 
     This is better than auto-publishing low quality content.
     Human can: approve, edit, or reject.
     """
+    # FIX-028b: Safe state access
+    humanized_post = state.get("humanized_post")
+    if not humanized_post:
+        return {"critical_error": "Missing humanized_post for manual review"}
+
     return {
         "stage": "manual_review_required",
         "human_approval_status": "pending_manual_review",
@@ -11480,7 +11662,7 @@ async def queue_for_manual_review(state: PipelineState) -> Dict[str, Any]:
             f"below threshold. Queued for manual review."
         ],
         "final_content": {
-            "text": state["humanized_post"].humanized_text,
+            "text": humanized_post.humanized_text,
             "visual": state.get("visual_asset"),
             "qc_score": state.get("qc_result", {}).get("aggregate_score"),
             "requires_human_decision": True
@@ -11653,6 +11835,7 @@ def with_error_handling(node_name: str = None):
 def with_timeout(timeout_seconds: int = None, node_name: str = None):
     """
     Decorator to add timeout to async node functions.
+    FIX-014: Use local variable instead of mutating closure.
 
     Usage:
         @with_timeout(60)
@@ -11665,20 +11848,20 @@ def with_timeout(timeout_seconds: int = None, node_name: str = None):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Determine timeout
-            nonlocal timeout_seconds
-            if timeout_seconds is None:
+            # FIX-014: Calculate timeout locally without mutating closure
+            actual_timeout = timeout_seconds
+            if actual_timeout is None:
                 name = node_name or func.__name__.replace("_node", "")
-                timeout_seconds = NODE_TIMEOUTS.get(name, 60)
+                actual_timeout = NODE_TIMEOUTS.get(name, 60)
 
             try:
                 return await asyncio.wait_for(
                     func(*args, **kwargs),
-                    timeout=timeout_seconds
+                    timeout=actual_timeout
                 )
             except asyncio.TimeoutError:
                 name = node_name or func.__name__
-                raise NodeTimeoutError(name, timeout_seconds)
+                raise NodeTimeoutError(name, actual_timeout)
 
         return wrapper
     return decorator
@@ -13425,7 +13608,7 @@ class LinkedInMetricsCollector:
 
         return PostMetricsSnapshot(
             post_id=post_urn,
-            timestamp=datetime.now(),
+            timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
             minutes_since_publish=self._calc_minutes_since_publish(post),
             likes=likes_count,
             comments=comments_count,
@@ -13981,6 +14164,7 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from enum import Enum
 import json
+import asyncio  # FIX-002: Required for asyncio.Lock() in ThreadSafeLearningEngine
 
 
 class LearningType(Enum):
@@ -14050,7 +14234,7 @@ class MicroLearning:
         else:
             reference_time = self.last_confirmed_at
 
-        days_since_activity = (datetime.now() - reference_time).days
+        days_since_activity = (utc_now() - reference_time).days  # FIX-024: Use timezone-aware datetime
 
         if days_since_activity > 0:
             # Exponential decay: confidence * (1 - rate)^days
@@ -14064,7 +14248,7 @@ class MicroLearning:
     def confirm(self):
         """Called when evidence supports this learning."""
         self.confirmations += 1
-        self.last_confirmed_at = datetime.now()
+        self.last_confirmed_at = utc_now()  # FIX-024: Use timezone-aware datetime
         # Confidence grows logarithmically (diminishing returns)
         self.confidence = min(1.0, self.confidence + 0.1 * (1 - self.confidence))
 
@@ -14162,8 +14346,30 @@ class ThreadSafeLearningEngine:
 
     # Expose read-only properties
     @property
-    def learnings(self):
-        return self._engine.learnings
+    def learnings(self) -> Dict[str, "MicroLearning"]:
+        """
+        FIX-027b: Return copy of learnings dict to prevent external mutation.
+        """
+        return dict(self._engine.learnings)
+
+    # FIX-027: Add missing wrapper methods
+    def get_learnings_for_prompt(
+        self,
+        component: str,
+        content_type: Optional[ContentType] = None
+    ) -> List["MicroLearning"]:
+        """
+        Get relevant learnings for prompt injection.
+        Read-only operation - no lock needed.
+        """
+        return self._engine.get_learnings_for_prompt(component, content_type)
+
+    def format_learnings_for_prompt(self, learnings: List["MicroLearning"]) -> str:
+        """
+        Format learnings as prompt text.
+        Pure function - no lock needed.
+        """
+        return self._engine.format_learnings_for_prompt(learnings)
 
 
 class ThreadSafeSelfModEngine:
@@ -15304,11 +15510,27 @@ class CodeGenerationEngine:
                 check=True
             )
 
+    # FIX-010: Allowlist of trusted packages instead of regex validation
+    ALLOWED_PACKAGES = frozenset({
+        "requests", "httpx", "aiohttp", "beautifulsoup4", "lxml",
+        "pandas", "numpy", "pydantic", "python-dateutil",
+        "tenacity", "structlog", "rich", "pillow", "anthropic",
+        "openai", "supabase", "pytz", "python-dotenv",
+        # Add more trusted packages as needed
+    })
+
     def _is_safe_package_name(self, name: str) -> bool:
-        """Validate package name for security."""
+        """
+        Validate package name using allowlist.
+        FIX-010: Regex validation is bypassable; use strict allowlist instead.
+        """
         import re
-        # Only allow alphanumeric, hyphens, underscores, and version specs
-        return bool(re.match(r'^[a-zA-Z0-9_-]+(\[.*\])?(==|>=|<=|~=|!=)?[a-zA-Z0-9._-]*$', name))
+        # Extract base package name (before version specifier or extras)
+        match = re.match(r'^([a-zA-Z0-9_-]+)', name)
+        if not match:
+            return False
+        base_name = match.group(1).lower().replace('_', '-')
+        return base_name in self.ALLOWED_PACKAGES
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -15563,22 +15785,36 @@ class CodeValidator:
             return False
 
     async def _test_import(self, generated: GeneratedCode) -> bool:
-        """Test that the module can be imported."""
+        """
+        Test that the module can be imported.
+        FIX-009: Run import test in subprocess to prevent code execution in main process.
+        """
         try:
             with tempfile.TemporaryDirectory() as sandbox:
                 sandbox_path = Path(sandbox)
                 module_path = sandbox_path / f"{generated.module_name}.py"
                 module_path.write_text(generated.code, encoding="utf-8")
 
-                # Try to import
-                spec = importlib.util.spec_from_file_location(
-                    generated.module_name,
-                    module_path
+                # FIX-009: Test import in isolated subprocess instead of main process
+                test_script = f'''
+import sys
+sys.path.insert(0, r"{sandbox_path}")
+try:
+    import {generated.module_name}
+    print("IMPORT_SUCCESS")
+except Exception as e:
+    print(f"IMPORT_FAILED: {{e}}")
+    sys.exit(1)
+'''
+                result = subprocess.run(
+                    [sys.executable, "-c", test_script],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    cwd=sandbox
                 )
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
+                return result.returncode == 0 and "IMPORT_SUCCESS" in result.stdout
 
-                return True
         except Exception as e:
             import logging
             logging.getLogger("CodeValidation").error(f"Import test failed: {e}")
@@ -15639,7 +15875,7 @@ class ModuleRegistry:
                 name=generated.module_name,
                 path=file_path,
                 capability_type=self._infer_capability_type(file_path),
-                loaded_at=datetime.now(),
+                loaded_at=utc_now(),  # FIX-024: Use timezone-aware datetime
                 description=generated.description,
                 exports=self._extract_exports(generated.code)
             )
@@ -15670,7 +15906,7 @@ class ModuleRegistry:
             else:
                 registered.module_ref = await self._load_module(registered)
 
-            registered.loaded_at = datetime.now()
+            registered.loaded_at = utc_now()  # FIX-024: Use timezone-aware datetime
             registered.version += 1
 
             logger.info(f"[REGISTRY] Reloaded module: {module_name} (v{registered.version})")
@@ -16308,10 +16544,20 @@ class ResearchAgent:
     Uses Perplexity for web research, scrapes competitor posts, analyzes own data.
     """
 
-    def __init__(self, perplexity_client, linkedin_scraper, analytics_db):
+    def __init__(self, perplexity_client, linkedin_scraper, analytics_db, claude_client=None):
+        """
+        Initialize Research Agent.
+
+        Args:
+            perplexity_client: Perplexity API client for web research
+            linkedin_scraper: LinkedIn scraping client
+            analytics_db: Database client for analytics
+            claude_client: Claude API client for LLM operations (FIX-005)
+        """
         self.perplexity = perplexity_client
         self.linkedin = linkedin_scraper
         self.db = analytics_db
+        self.claude = claude_client or get_claude()  # FIX-005: Was used but never initialized
 
         # Top LinkedIn influencers to learn from
         self.competitors = [
@@ -16365,9 +16611,10 @@ class ResearchAgent:
             return ResearchTrigger.UNDERPERFORMANCE
 
         # Check for weekly cycle (Sunday)
-        if datetime.now().weekday() == 6:  # Sunday
+        now = utc_now()  # FIX-024: Use timezone-aware datetime
+        if now.weekday() == 6:  # Sunday
             last_research = await self.db.get_last_research_date()
-            if (datetime.now() - last_research).days >= 7:
+            if (now - last_research).days >= 7:
                 return ResearchTrigger.WEEKLY_CYCLE
 
         return None
@@ -16947,7 +17194,7 @@ class ResearchAgent:
             return []
 
         findings_text = "\n".join([
-            f"- [{f.source}] {f.description} (confidence: {getattr(f, 'confidence', 'N/A')})"
+            f"- [{f.source}] {f.finding} (confidence: {f.confidence:.2f})"  # FIX-006: field is 'finding', not 'description'
             for f in findings
         ])
 
@@ -17338,7 +17585,7 @@ class RollbackManager:
         # Save metadata
         snapshot = SystemSnapshot(
             id=snapshot_id,
-            created_at=datetime.now(),
+            created_at=utc_now(),  # FIX-024: Use timezone-aware datetime
             trigger=trigger,
             description=description,
             prompts=prompts,
@@ -17396,7 +17643,7 @@ class RollbackManager:
 
             # Export recent code modifications (last 30 days)
             from datetime import timedelta
-            cutoff = (datetime.now() - timedelta(days=30)).isoformat()
+            cutoff = (utc_now() - timedelta(days=30)).isoformat()  # FIX-024: Use timezone-aware datetime
             modifications = await db.client.table("code_modifications").select("*").gte("created_at", cutoff).execute()
             state["code_modifications"] = modifications.data if modifications.data else []
 
@@ -18543,7 +18790,7 @@ class CodeEvolutionEngine:
             path=module_path,
             code=code,
             purpose=purpose,
-            generated_at=datetime.now(),
+            generated_at=utc_now(),  # FIX-024: Use timezone-aware datetime
             knowledge_source=knowledge,
             validated=True
         )
@@ -18600,7 +18847,7 @@ class CodeEvolutionEngine:
             version=version,
             changes_made=reflection.prompt_changes,
             knowledge_source=knowledge,
-            evolved_at=datetime.now()
+            evolved_at=utc_now()  # FIX-024: Use timezone-aware datetime
         )
 
     def _validate_syntax(self, code: str) -> bool:
@@ -18803,13 +19050,14 @@ class DeepImprovementLoop:
 
         # Step 4: Store learnings
         for topic, content in knowledge.items():
+            now = utc_now()  # FIX-024: Use timezone-aware datetime
             await self.kb.store_learning(Learning(
-                id=f"learning_{datetime.now().timestamp()}",
+                id=f"learning_{now.timestamp()}",
                 topic=topic,
                 content=json.dumps(content),
                 source="critique_research",
                 confidence=reflection.confidence_in_changes,
-                learned_at=datetime.now()
+                learned_at=now
             ))
 
         # Step 5: Decide modification type
@@ -18955,7 +19203,7 @@ class SelfModificationEngine:
                 continue
 
             record = ModificationRecord(
-                timestamp=datetime.now(),
+                timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
                 component=component,
                 parameter=modification["parameter"],
                 old_value=modification["old_value"],
@@ -19011,7 +19259,7 @@ class SelfModificationEngine:
 
         # Restore old value
         await self._apply_modification(ModificationRecord(
-            timestamp=datetime.now(),
+            timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
             component=record.component,
             parameter=record.parameter,
             old_value=record.new_value,  # Swap
@@ -19138,7 +19386,7 @@ class ExperimentationEngine:
 
         experiment = await self.db.get_experiment(experiment_id)
         experiment.status = ExperimentStatus.RUNNING
-        experiment.started_at = datetime.now()
+        experiment.started_at = utc_now()  # FIX-024: Use timezone-aware datetime
 
         self.current_experiment = experiment
         await self.db.update_experiment(experiment)
@@ -19313,7 +19561,7 @@ class ExperimentationEngine:
             )
 
         exp.status = ExperimentStatus.STOPPED_EARLY if early_stop else ExperimentStatus.COMPLETED
-        exp.completed_at = datetime.now()
+        exp.completed_at = utc_now()  # FIX-024: Use timezone-aware datetime
 
         # FIX: Only apply winner if statistically significant AND treatment won
         if exp.winner == "treatment" and exp.confidence >= 0.95:
@@ -19687,6 +19935,21 @@ class AutonomyConfig:
     consecutive_failures_threshold: int = 3
     degradation_duration_hours: int = 24
 
+    def __post_init__(self):
+        """FIX-021: Validate configuration values."""
+        if not 0.0 <= self.auto_publish_threshold <= 10.0:
+            raise ValidationError(
+                f"auto_publish_threshold must be 0-10, got {self.auto_publish_threshold}"
+            )
+        if self.consecutive_failures_threshold < 1:
+            raise ValidationError(
+                f"consecutive_failures_threshold must be >= 1, got {self.consecutive_failures_threshold}"
+            )
+        if self.degradation_duration_hours <= 0:
+            raise ValidationError(
+                f"degradation_duration_hours must be > 0, got {self.degradation_duration_hours}"
+            )
+
 
 class AutonomyManager:
     """
@@ -19723,6 +19986,37 @@ class AutonomyManager:
         self._consecutive_failures: int = 0
         self._degradation_until: Optional[datetime] = None
 
+    def _get_effective_level_unlocked(
+        self,
+        content_type: Optional[ContentType] = None
+    ) -> AutonomyLevel:
+        """
+        FIX-004: Internal version without lock - caller must hold lock.
+        Used by get_status() to avoid deadlock.
+        """
+        # Check temporary elevation first
+        if self._temporary_elevation:
+            level, until = self._temporary_elevation
+            if datetime.now(timezone.utc) < until:
+                return level
+            else:
+                # Elevation expired, clear it
+                self._temporary_elevation = None
+
+        # Check auto-degradation
+        if self._degradation_until and datetime.now(timezone.utc) < self._degradation_until:
+            # Degraded by one level (min Level 1)
+            degraded = max(1, self._config.default_level - 1)
+            return AutonomyLevel(degraded)
+
+        # Check content-type specific override
+        if content_type:
+            type_key = content_type.value if hasattr(content_type, 'value') else str(content_type)
+            if type_key in self._config.content_type_levels:
+                return self._config.content_type_levels[type_key]
+
+        return self._config.default_level
+
     async def get_effective_level(
         self,
         content_type: Optional[ContentType] = None
@@ -19737,28 +20031,7 @@ class AutonomyManager:
         Thread-safe: uses async lock.
         """
         async with self._lock:
-            # Check temporary elevation first
-            if self._temporary_elevation:
-                level, until = self._temporary_elevation
-                if datetime.now() < until:
-                    return level
-                else:
-                    # Elevation expired, clear it
-                    self._temporary_elevation = None
-
-            # Check auto-degradation
-            if self._degradation_until and datetime.now() < self._degradation_until:
-                # Degraded by one level (min Level 1)
-                degraded = max(1, self._config.default_level - 1)
-                return AutonomyLevel(degraded)
-
-            # Check content-type specific override
-            if content_type:
-                type_key = content_type.value if hasattr(content_type, 'value') else str(content_type)
-                if type_key in self._config.content_type_levels:
-                    return self._config.content_type_levels[type_key]
-
-            return self._config.default_level
+            return self._get_effective_level_unlocked(content_type)
 
     async def can_auto_publish(
         self,
@@ -19828,7 +20101,7 @@ class AutonomyManager:
         - Testing mode (Level 1 during debugging)
         """
         async with self._lock:
-            until = datetime.now() + timedelta(hours=hours)
+            until = utc_now() + timedelta(hours=hours)  # FIX-024: Use timezone-aware datetime
             self._temporary_elevation = (level, until)
 
     async def clear_temporary_elevation(self) -> None:
@@ -19853,7 +20126,7 @@ class AutonomyManager:
 
             if self._consecutive_failures >= self._config.consecutive_failures_threshold:
                 # Trigger degradation
-                self._degradation_until = datetime.now() + timedelta(
+                self._degradation_until = utc_now() + timedelta(  # FIX-024: Use timezone-aware datetime
                     hours=self._config.degradation_duration_hours
                 )
                 self._consecutive_failures = 0  # Reset counter
@@ -19874,7 +20147,8 @@ class AutonomyManager:
     async def get_status(self) -> Dict:
         """Get current autonomy status for monitoring/debugging."""
         async with self._lock:
-            effective_level = await self.get_effective_level()
+            # FIX-004: Use internal non-locking version to avoid deadlock
+            effective_level = self._get_effective_level_unlocked()
 
             status = {
                 "default_level": self._config.default_level,
@@ -19887,13 +20161,13 @@ class AutonomyManager:
                 status["temporary_elevation"] = {
                     "level": level,
                     "until": until.isoformat(),
-                    "active": datetime.now() < until
+                    "active": datetime.now(timezone.utc) < until
                 }
 
             if self._degradation_until:
                 status["degradation"] = {
                     "until": self._degradation_until.isoformat(),
-                    "active": datetime.now() < self._degradation_until
+                    "active": datetime.now(timezone.utc) < self._degradation_until
                 }
 
             return status
@@ -19901,27 +20175,41 @@ class AutonomyManager:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GLOBAL AUTONOMY MANAGER INSTANCE
+# FIX-015: Thread-safe async initialization with double-check locking
 # ═══════════════════════════════════════════════════════════════════════════
 
 _autonomy_manager: Optional[AutonomyManager] = None
+_autonomy_manager_lock: Optional[asyncio.Lock] = None
 
-def get_autonomy_manager() -> AutonomyManager:
-    """Get the global autonomy manager instance."""
-    global _autonomy_manager
+async def get_autonomy_manager() -> AutonomyManager:
+    """
+    Get the global autonomy manager instance.
+    FIX-015: Thread-safe async initialization with double-check locking.
+    """
+    global _autonomy_manager, _autonomy_manager_lock
+
+    # Lazy lock creation in current event loop
+    if _autonomy_manager_lock is None:
+        _autonomy_manager_lock = asyncio.Lock()
+
     if _autonomy_manager is None:
-        # Load config from settings
-        config = AutonomyConfig(
-            default_level=AutonomyLevel(SETTINGS["autonomy"]["default_level"]),
-            auto_publish_threshold=SETTINGS["autonomy"]["auto_publish_threshold"],
-            content_type_levels={
-                k: AutonomyLevel(v)
-                for k, v in SETTINGS["autonomy"].get("content_type_levels", {}).items()
-            },
-            auto_degradation_enabled=SETTINGS["autonomy"]["auto_degradation"]["enabled"],
-            consecutive_failures_threshold=SETTINGS["autonomy"]["auto_degradation"]["consecutive_failures_threshold"],
-            degradation_duration_hours=SETTINGS["autonomy"]["auto_degradation"]["degradation_duration_hours"],
-        )
-        _autonomy_manager = AutonomyManager(config)
+        async with _autonomy_manager_lock:
+            # Double-check after acquiring lock
+            if _autonomy_manager is None:
+                # Load config from settings
+                config = AutonomyConfig(
+                    default_level=AutonomyLevel(SETTINGS["autonomy"]["default_level"]),
+                    auto_publish_threshold=SETTINGS["autonomy"]["auto_publish_threshold"],
+                    content_type_levels={
+                        k: AutonomyLevel(v)
+                        for k, v in SETTINGS["autonomy"].get("content_type_levels", {}).items()
+                    },
+                    auto_degradation_enabled=SETTINGS["autonomy"]["auto_degradation"]["enabled"],
+                    consecutive_failures_threshold=SETTINGS["autonomy"]["auto_degradation"]["consecutive_failures_threshold"],
+                    degradation_duration_hours=SETTINGS["autonomy"]["auto_degradation"]["degradation_duration_hours"],
+                )
+                _autonomy_manager = AutonomyManager(config)
+
     return _autonomy_manager
 ```
 
@@ -19959,8 +20247,28 @@ class ApprovalTimeoutConfig:
     auto_resolve_min_score: float = 8.0     # Only auto-approve if score >= this
 
     def __post_init__(self):
+        """FIX-022: Comprehensive validation."""
         if self.escalation_contacts is None:
             self.escalation_contacts = []
+
+        # FIX-022: Validate auto_resolve_action
+        valid_actions = {"approve", "reject", "hold"}
+        if self.auto_resolve_action not in valid_actions:
+            raise ValidationError(
+                f"auto_resolve_action must be one of {valid_actions}, got '{self.auto_resolve_action}'"
+            )
+
+        # FIX-022: Validate timing constraints
+        if not (self.reminder_after_hours < self.escalate_after_hours < self.auto_resolve_after_hours):
+            raise ValidationError(
+                "Must have: reminder_after < escalate_after < auto_resolve_after"
+            )
+
+        # FIX-022: Validate score range
+        if not 0.0 <= self.auto_resolve_min_score <= 10.0:
+            raise ValidationError(
+                f"auto_resolve_min_score must be 0-10, got {self.auto_resolve_min_score}"
+            )
 
 
 @dataclass
@@ -20073,7 +20381,7 @@ class ApprovalTimeoutManager:
         result = await self._db.client.table("pending_approvals").select("*").eq("status", "pending").execute()
 
         pending = result.data or []
-        now = datetime.now()
+        now = utc_now()  # FIX-024: Use timezone-aware datetime
 
         for approval in pending:
             requested_at = datetime.fromisoformat(approval["requested_at"])
@@ -20197,7 +20505,7 @@ class ApprovalTimeoutManager:
         result = await self._db.client.table("pending_approvals").select("*").eq("status", "pending").execute()
 
         pending = result.data or []
-        now = datetime.now()
+        now = utc_now()  # FIX-024: Use timezone-aware datetime
 
         total = len(pending)
         urgent = 0  # Pending > 24h
@@ -20724,7 +21032,7 @@ class AgentLogger:
         """Log a message."""
 
         entry = LogEntry(
-            timestamp=datetime.now(),
+            timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
             level=level,
             component=component,
             message=message,
@@ -21095,7 +21403,7 @@ class TelegramLogViewer:
 
         start_time = None
         if args and args[0] == "24h":
-            start_time = datetime.now() - timedelta(hours=24)
+            start_time = utc_now() - timedelta(hours=24)  # FIX-024: Use timezone-aware datetime
 
         logs = await self.logger.query_logs(
             level=LogLevel.ERROR,
@@ -21244,6 +21552,9 @@ class PipelineRunLogger:
 ### Daily Log Digest
 
 ```python
+from datetime import datetime, timedelta, timezone  # FIX-003: Required for timedelta and timezone-aware datetime
+
+
 class DailyDigest:
     """
     Generates daily summary of agent activity.
@@ -21257,7 +21568,7 @@ class DailyDigest:
     async def generate_digest(self) -> str:
         """Generate daily digest."""
 
-        yesterday = datetime.now() - timedelta(days=1)
+        yesterday = utc_now() - timedelta(days=1)  # FIX-024: Use timezone-aware datetime
 
         # Query logs from last 24h
         all_logs = await self.logger.query_logs(
@@ -21464,6 +21775,31 @@ class ModificationSafetySystem:
         self.db = db
         self.telegram = telegram_notifier
 
+    def _validate_modification_request(self, mod: "ModificationRequest") -> None:
+        """
+        FIX-007: Validate a ModificationRequest before processing.
+        Moved inside class as instance method.
+
+        Raises:
+            ValidationError: If required fields are missing or invalid
+            SecurityError: If the request appears malicious
+        """
+        if not mod.component:
+            raise ValidationError("ModificationRequest.component is required")
+        if not mod.modification_type:
+            raise ValidationError("ModificationRequest.modification_type is required")
+        if mod.before_state is None:
+            raise ValidationError("ModificationRequest.before_state is required")
+        if mod.after_state is None:
+            raise ValidationError("ModificationRequest.after_state is required")
+        if not mod.reasoning:
+            raise ValidationError("ModificationRequest.reasoning is required")
+
+        # Validate component is in whitelist
+        valid_components = {"writer", "trend_scout", "visual_creator", "scheduler", "qc", "humanizer", "analyzer"}
+        if mod.component not in valid_components:
+            raise SecurityError(f"Unknown component: {mod.component}")
+
     async def request_modification(self, mod: ModificationRequest) -> str:
         """
         Process modification request based on risk level.
@@ -21603,6 +21939,40 @@ class ModificationSafetySystem:
         mod.status = "pending"
         await self.db.save_modification(mod)
 
+    def _get_config_path(self, component: str) -> str:
+        """
+        FIX-008: Get the configuration file path for a component.
+        Previously called but never defined, causing AttributeError.
+
+        Args:
+            component: Component name (e.g., "writer", "qc", "humanizer")
+
+        Returns:
+            Absolute path to the component's configuration file
+
+        Raises:
+            ValidationError: If component is not recognized
+        """
+        import os
+
+        # Map components to their config files
+        config_mapping = {
+            "writer": "config/writer_config.json",
+            "trend_scout": "config/trend_scout_config.json",
+            "visual_creator": "config/visual_creator_config.json",
+            "scheduler": "config/scheduler_config.json",
+            "qc": "config/qc_config.json",
+            "humanizer": "config/humanizer_config.json",
+            "analyzer": "config/analyzer_config.json",
+        }
+
+        if component not in config_mapping:
+            raise ValidationError(f"Unknown component: {component}")
+
+        # Get project root from environment or use default
+        project_root = os.environ.get("PROJECT_ROOT", os.getcwd())
+        return os.path.join(project_root, config_mapping[component])
+
     async def _apply_state(self, component: str, state: dict):
         """
         Apply state to a component.
@@ -21683,30 +22053,8 @@ class SecurityError(Exception):
     pass
 
 
-# FIX: Validation method for ModificationRequest
-def _validate_modification_request(mod: "ModificationRequest") -> None:
-    """
-    Validate a ModificationRequest before processing.
-
-    Raises:
-        ValidationError: If required fields are missing or invalid
-        SecurityError: If the request appears malicious
-    """
-    if not mod.component:
-        raise ValidationError("ModificationRequest.component is required")
-    if not mod.modification_type:
-        raise ValidationError("ModificationRequest.modification_type is required")
-    if mod.before_state is None:
-        raise ValidationError("ModificationRequest.before_state is required")
-    if mod.after_state is None:
-        raise ValidationError("ModificationRequest.after_state is required")
-    if not mod.reasoning:
-        raise ValidationError("ModificationRequest.reasoning is required")
-
-    # Validate component is in whitelist
-    valid_components = {"writer", "trend_scout", "visual_creator", "scheduler", "qc", "humanizer", "analyzer"}
-    if mod.component not in valid_components:
-        raise SecurityError(f"Unknown component: {mod.component}")
+# FIX-007: This function is now a method inside ModificationSafetySystem class
+# See class definition at line ~21492 for the method _validate_modification_request(self, mod)
 
 
 # FIX #7: Custom exceptions for configuration operations
@@ -21726,30 +22074,34 @@ class ConfigurationWriteError(Exception):
     """Raised when configuration file cannot be written."""
     pass
 
-    def _get_config_path(self, component: str) -> str:
-        """
-        Get config file path for component.
 
-        FIX: Removed path traversal vulnerability by using whitelist-only approach.
-        Previously returned f"config/{component}_config.json" for unknown components,
-        allowing path traversal attacks like component="../../etc/passwd".
-        """
-        paths = {
-            "writer": "config/writer_config.json",
-            "trend_scout": "config/scoring_weights.json",
-            "visual_creator": "config/visual_config.json",
-            "scheduler": "config/schedule.json",
-            "qc": "config/evaluator_config.json",
-            "humanizer": "config/humanizer_config.json",
-            "analyzer": "config/analyzer_config.json",
-        }
-        # FIX: Security - whitelist only, no dynamic path construction
-        if component not in paths:
-            raise ValueError(
-                f"Unknown component: {component}. "
-                f"Valid components: {list(paths.keys())}"
-            )
-        return paths[component]
+# FIX-008: This method belongs to ModificationSafetySystem class
+# It should be added as a method inside the class definition above
+# Here's the standalone helper version for reference:
+def get_config_path(component: str) -> str:
+    """
+    Get config file path for component.
+
+    FIX-008: Removed path traversal vulnerability by using whitelist-only approach.
+    Previously returned f"config/{component}_config.json" for unknown components,
+    allowing path traversal attacks like component="../../etc/passwd".
+    """
+    paths = {
+        "writer": "config/writer_config.json",
+        "trend_scout": "config/scoring_weights.json",
+        "visual_creator": "config/visual_config.json",
+        "scheduler": "config/schedule.json",
+        "qc": "config/evaluator_config.json",
+        "humanizer": "config/humanizer_config.json",
+        "analyzer": "config/analyzer_config.json",
+    }
+    # FIX-008: Security - whitelist only, no dynamic path construction
+    if component not in paths:
+        raise ValueError(
+            f"Unknown component: {component}. "
+            f"Valid components: {list(paths.keys())}"
+        )
+    return paths[component]
 ```
 
 ### Integration with Meta-Agent
@@ -21969,9 +22321,13 @@ class SingleCallEvaluator:
     Return as structured JSON matching the SingleCallEvaluation schema.
     """
 
-    def __init__(self, claude_client):
+    def __init__(self, claude_client, threshold_config: "ThresholdConfig" = None):
+        """
+        FIX-018: Inject ThresholdConfig for centralized threshold management.
+        """
         self.claude = claude_client
         self.rubric = evaluation_rubric
+        self.threshold_config = threshold_config or THRESHOLD_CONFIG
 
     async def evaluate(
         self,
@@ -21995,7 +22351,11 @@ class SingleCallEvaluator:
 
         # Calculate weighted total
         response.weighted_total = self._calculate_weighted_total(response.scores)
-        response.passes_threshold = response.weighted_total >= 8.0
+
+        # FIX-018: Use centralized threshold with content-type multiplier
+        pass_threshold = self.threshold_config.get_pass_threshold(content_type)
+        response.passes_threshold = response.weighted_total >= pass_threshold
+        response.threshold_used = pass_threshold  # FIX-018b: Record which threshold was used
 
         # If doesn't pass, generate revision recommendations
         if not response.passes_threshold:
@@ -22521,7 +22881,7 @@ class AuthorProfileAgent:
         updated_profile.author_name = current_profile.author_name
         updated_profile.author_role = current_profile.author_role
         updated_profile.created_at = current_profile.created_at
-        updated_profile.last_updated = datetime.now()
+        updated_profile.last_updated = utc_now()  # FIX-024: Use timezone-aware datetime
         updated_profile.posts_analyzed = current_profile.posts_analyzed + len(new_posts)
 
         await self.db.save_author_profile(updated_profile)
@@ -22673,8 +23033,26 @@ class WriterAgent:
 ```python
 from dataclasses import dataclass
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from enum import Enum
 import pytz
+
+
+class PostStatus(str, Enum):
+    """
+    FIX-026: Status of a scheduled post.
+    Replace magic strings with enum for type safety.
+    """
+    SCHEDULED = "scheduled"
+    PUBLISHING = "publishing"  # Being processed (FIX-017 atomic claim)
+    PUBLISHED = "published"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+    @property
+    def is_terminal(self) -> bool:
+        """Check if status is terminal (no further transitions)."""
+        return self in {PostStatus.PUBLISHED, PostStatus.CANCELLED, PostStatus.FAILED}
 
 
 @dataclass
@@ -22689,8 +23067,8 @@ class ScheduledPost:
     scheduled_time: datetime
     timezone: str
 
-    # Status
-    status: str  # "scheduled", "published", "cancelled", "failed"
+    # Status - FIX-026: Now using PostStatus enum
+    status: PostStatus  # Use PostStatus enum instead of string
     published_at: Optional[datetime]
     linkedin_post_id: Optional[str]
 
@@ -22794,36 +23172,48 @@ class SchedulingSystem:
         """
         Schedule a post for publication.
         Handles conflict avoidance and optimal timing.
+        FIX-016: Use database-level locking to prevent race conditions.
         """
-
+        # FIX-016: Validate preferred_time timezone awareness
         if preferred_time:
-            # Validate preferred time
-            if not await self._is_slot_available(preferred_time):
-                raise SchedulingConflictError(
-                    f"Cannot schedule at {preferred_time}. "
-                    f"Conflicts with existing post or violates constraints."
-                )
-            scheduled_time = preferred_time
-        else:
-            # Find next optimal slot
-            scheduled_time = await self._find_next_optimal_slot()
+            if preferred_time.tzinfo is None:
+                raise ValidationError("preferred_time must be timezone-aware")
 
-        scheduled_post = ScheduledPost(
-            id=generate_id(),
-            content=post.content,
-            visual_asset_id=post.visual_asset_id,
-            content_type=post.content_type,
-            scheduled_time=scheduled_time,
-            timezone=self.timezone,
-            status="scheduled",
-            published_at=None,
-            linkedin_post_id=None,
-            created_at=datetime.now(),
-            approved_by=post.approved_by,
-            qc_score=post.qc_score
-        )
+            min_lead_time = timedelta(minutes=5)
+            if preferred_time < datetime.now(timezone.utc) + min_lead_time:
+                raise ValidationError(f"Must schedule at least {min_lead_time} in advance")
 
-        await self.db.save_scheduled_post(scheduled_post)
+        # FIX-016: Use atomic reservation with advisory lock to prevent race conditions
+        lock_key = f"schedule_slot_{preferred_time.isoformat() if preferred_time else 'auto'}"
+        async with self.db.advisory_lock(lock_key):
+            if preferred_time:
+                # Validate preferred time inside lock
+                if not await self._is_slot_available(preferred_time):
+                    raise SchedulingConflictError(
+                        f"Cannot schedule at {preferred_time}. "
+                        f"Conflicts with existing post or violates constraints."
+                    )
+                scheduled_time = preferred_time
+            else:
+                # Find next optimal slot inside lock
+                scheduled_time = await self._find_next_optimal_slot()
+
+            scheduled_post = ScheduledPost(
+                id=generate_id(),
+                content=post.content,
+                visual_asset_id=post.visual_asset_id,
+                content_type=post.content_type,
+                scheduled_time=scheduled_time,
+                timezone=self.timezone,
+                status="scheduled",
+                published_at=None,
+                linkedin_post_id=None,
+                created_at=datetime.now(timezone.utc),  # FIX-016b: timezone-aware
+                approved_by=post.approved_by,
+                qc_score=post.qc_score
+            )
+
+            await self.db.save_scheduled_post(scheduled_post)
 
         return scheduled_post
 
@@ -23005,19 +23395,33 @@ class PublishingScheduler:
         self.scheduler.start()
 
     async def _check_and_publish(self):
-        """Check for posts due for publication."""
+        """
+        Check for posts due for publication.
+        FIX-017: Use atomic claim to prevent duplicate publishing.
+        """
+        now = datetime.now(timezone.utc)
 
-        now = datetime.now(pytz.timezone(self.scheduling.timezone))
-
-        # Get posts scheduled for now (within 2 minute window)
-        due_posts = await self.scheduling.db.get_scheduled_posts_in_range(
-            now - timedelta(minutes=1),
-            now + timedelta(minutes=1),
-            status="scheduled"
+        # FIX-017: Atomic claim - only process posts we successfully claim
+        # This changes status from "scheduled" to "publishing" atomically
+        claimed_posts = await self.scheduling.db.claim_due_posts(
+            before_time=now + timedelta(minutes=1),
+            after_time=now - timedelta(minutes=1),
+            from_status="scheduled",
+            to_status="publishing",
+            limit=10
         )
 
-        for post in due_posts:
-            await self._publish_post(post)
+        for post in claimed_posts:
+            try:
+                await self._publish_post(post)
+            except Exception as e:
+                # FIX-017b: On failure, mark as failed (not back to scheduled)
+                post.status = "failed"
+                post.error_message = str(e)
+                await self.scheduling.db.update_scheduled_post(post)
+                await self.telegram.notify(
+                    f"❌ Failed to publish post {post.id}: {e}"
+                )
 
     async def _publish_post(self, post: ScheduledPost):
         """Publish a single post to LinkedIn."""
@@ -23034,7 +23438,7 @@ class PublishingScheduler:
 
             # Update status
             post.status = "published"
-            post.published_at = datetime.now()
+            post.published_at = datetime.now(timezone.utc)  # FIX-017c: timezone-aware
             post.linkedin_post_id = linkedin_post_id
             await self.scheduling.db.update_scheduled_post(post)
 
@@ -23045,8 +23449,8 @@ class PublishingScheduler:
             )
 
         except Exception as e:
-            post.status = "failed"
-            await self.scheduling.db.update_scheduled_post(post)
+            # Re-raise to let _check_and_publish handle it
+            raise
 
             await self.telegram.notify(
                 f"❌ Failed to publish post {post.id}:\n{str(e)}"
