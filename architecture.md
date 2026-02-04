@@ -142,15 +142,26 @@ import threading
 from typing import Optional
 
 
+import warnings
+
+
 class LoggerFactory:
     """
-    Centralized logger factory for consistent logging across all modules.
+    LOGGING FIX 6.1: DEPRECATED - Use AgentLogger from logging/agent_logger.py instead.
 
-    Usage:
+    This class is kept for backwards compatibility only.
+    AgentLogger provides additional features:
+    - Structured logging with Supabase persistence
+    - Telegram notifications for critical errors
+    - Proper async task handling
+
+    Usage (deprecated):
         logger = LoggerFactory.get_logger("ModuleName")
         logger.info("Message")
 
-    All loggers inherit from root configuration.
+    Preferred usage:
+        from src.logging.agent_logger import AgentLogger
+        logger = AgentLogger.get_logger("ModuleName")
     """
 
     _configured = False
@@ -166,11 +177,14 @@ class LoggerFactory:
         """
         Configure root logger. Call once at application startup.
 
-        Args:
-            level: Logging level (DEBUG, INFO, WARNING, ERROR)
-            format_string: Custom format string
-            log_file: Optional file path for file logging
+        DEPRECATED: Configure AgentLogger instead.
         """
+        warnings.warn(
+            "LoggerFactory.configure() is deprecated. Use AgentLogger.configure() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+
         with cls._lock:
             if cls._configured:
                 return
@@ -201,12 +215,14 @@ class LoggerFactory:
         """
         Get a logger for a module.
 
-        Standard naming convention:
-        - Agents: "Agent.TrendScout", "Agent.Writer", "Agent.QC"
-        - Pipeline: "Pipeline.Orchestrator", "Pipeline.State"
-        - Services: "Service.LinkedIn", "Service.NanoBanana"
-        - Core: "Core.Database", "Core.Config"
+        DEPRECATED: Use AgentLogger.get_logger() instead.
         """
+        warnings.warn(
+            "LoggerFactory.get_logger() is deprecated. Use AgentLogger.get_logger() instead.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+
         if not cls._configured:
             cls.configure()  # Auto-configure with defaults
 
@@ -230,6 +246,66 @@ def get_pipeline_logger(component: str) -> logging.Logger:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# CODE QUALITY FIX 11.4: CUSTOM EXCEPTIONS
+# Define all exception classes used throughout the codebase
+# ═══════════════════════════════════════════════════════════════════════════
+
+class AgentBaseError(Exception):
+    """Base exception for all agent-related errors."""
+    pass
+
+
+class ValidationError(ValueError):
+    """Raised when input validation fails."""
+    pass
+
+
+class DatabaseError(Exception):
+    """Raised when database operation fails."""
+    pass
+
+
+class ConfigurationError(Exception):
+    """Raised when configuration is invalid."""
+    pass
+
+
+class SecurityError(Exception):
+    """Raised when security check fails."""
+    pass
+
+
+class RetryExhaustedError(Exception):
+    """Raised when all retry attempts are exhausted."""
+    pass
+
+
+class LinkedInRateLimitError(AgentBaseError):
+    """Raised when LinkedIn rate limit is hit."""
+    pass
+
+
+class LinkedInSessionExpiredError(AgentBaseError):
+    """Raised when LinkedIn session expires."""
+    pass
+
+
+class LinkedInAPIError(AgentBaseError):
+    """Raised for general LinkedIn API errors."""
+    pass
+
+
+class ImageGenerationError(AgentBaseError):
+    """Raised when image generation fails."""
+    pass
+
+
+class SchedulingConflictError(AgentBaseError):
+    """Raised when scheduling slot is unavailable."""
+    pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # SUPABASE CLIENT
 # Единственный клиент для работы с базой данных
 # ═══════════════════════════════════════════════════════════════════════════
@@ -238,7 +314,7 @@ import os
 import asyncio
 import aiohttp
 from dataclasses import dataclass
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Set, NewType
 from datetime import datetime, timedelta, timezone
 from supabase._async.client import AsyncClient, create_async_client
 
@@ -261,9 +337,15 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# CODE QUALITY FIX 11.3: Moved uuid import to module level
+import uuid
+
+
 def generate_id() -> str:
     """
     Generate a unique ID for database records.
+
+    CODE QUALITY FIX 11.3: Moved import to module level to reduce overhead.
 
     Uses UUID4 which is suitable for:
     - Database primary keys
@@ -272,7 +354,6 @@ def generate_id() -> str:
     Returns:
         A unique UUID string (compatible with Supabase UUID type)
     """
-    import uuid
     return str(uuid.uuid4())
 
 
@@ -795,6 +876,84 @@ class SupabaseDB:
 
         await self.client.table("drafts").update(draft).eq("id", draft["id"]).execute()
 
+    # ─────────────────────────────────────────────────────────────────────
+    # DATABASE FIX 2.5: AGENT LOGS (missing - referenced in code but not in class)
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def save_agent_log(self, log_entry: Dict[str, Any]) -> str:
+        """Save an agent log entry."""
+        if not log_entry:
+            raise ValidationError("log_entry cannot be None or empty")
+        if "timestamp" not in log_entry or "level" not in log_entry:
+            raise ValidationError("log_entry must have 'timestamp' and 'level'")
+
+        result = await self.client.table("agent_logs").insert(log_entry).execute()
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
+        return result.data[0]["id"]
+
+    async def get_agent_logs(
+        self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        level: Optional[int] = None,
+        component: Optional[str] = None,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Query agent logs with filters."""
+        query = self.client.table("agent_logs").select("*")
+
+        if start_time:
+            query = query.gte("timestamp", start_time.isoformat())
+        if end_time:
+            query = query.lte("timestamp", end_time.isoformat())
+        if level:
+            query = query.gte("level", level)
+        if component:
+            query = query.eq("component", component)
+
+        result = await query.order("timestamp", desc=True).limit(limit).execute()
+        return result.data
+
+    # ─────────────────────────────────────────────────────────────────────
+    # DATABASE FIX 2.5: PIPELINE ERRORS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def save_pipeline_error(self, error: Dict[str, Any]) -> str:
+        """Save a pipeline error for post-mortem analysis."""
+        if not error:
+            raise ValidationError("error cannot be None or empty")
+
+        result = await self.client.table("pipeline_errors").insert(error).execute()
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
+        return result.data[0]["id"]
+
+    # ─────────────────────────────────────────────────────────────────────
+    # DATABASE FIX 2.5: PENDING APPROVALS
+    # ─────────────────────────────────────────────────────────────────────
+
+    async def save_pending_approval(self, approval: Dict[str, Any]) -> str:
+        """Save a pending approval request."""
+        if not approval or "run_id" not in approval:
+            raise ValidationError("approval must have 'run_id'")
+
+        result = await self.client.table("pending_approvals").insert(approval).execute()
+        if not result.data:
+            raise DatabaseError("Insert succeeded but returned no data")
+        return result.data[0]["id"]
+
+    async def get_pending_approvals(self, status: str = "pending") -> List[Dict[str, Any]]:
+        """Get pending approvals by status."""
+        result = await (
+            self.client.table("pending_approvals")
+            .select("*")
+            .eq("status", status)
+            .order("requested_at", desc=False)
+            .execute()
+        )
+        return result.data
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GLOBAL DATABASE INSTANCE
@@ -887,6 +1046,14 @@ CREATE INDEX idx_posts_created_at ON posts(created_at DESC);
 CREATE INDEX idx_posts_qc_score ON posts(qc_score DESC);
 CREATE INDEX idx_posts_topic_id ON posts(topic_id);
 CREATE INDEX idx_posts_published_at ON posts(published_at DESC) WHERE published_at IS NOT NULL;
+
+-- DATABASE FIX 2.2: Add missing foreign keys for posts.topic_id
+ALTER TABLE posts
+    ALTER COLUMN topic_id TYPE UUID USING topic_id::uuid;
+
+ALTER TABLE posts
+    ADD CONSTRAINT fk_posts_topic
+    FOREIGN KEY (topic_id) REFERENCES topic_cache(id) ON DELETE SET NULL;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- POST_METRICS: Analytics snapshots over time
@@ -1217,57 +1384,42 @@ CREATE INDEX idx_drafts_stage ON drafts(stage);
 CREATE INDEX idx_drafts_topic_id ON drafts(topic_id);
 CREATE INDEX idx_drafts_content_type ON drafts(content_type);
 
+-- DATABASE FIX 2.2: Add missing foreign keys for drafts.topic_id
+ALTER TABLE drafts
+    ALTER COLUMN topic_id TYPE UUID USING topic_id::uuid;
+
+ALTER TABLE drafts
+    ADD CONSTRAINT fk_drafts_topic
+    FOREIGN KEY (topic_id) REFERENCES topic_cache(id) ON DELETE SET NULL;
+
 -- ───────────────────────────────────────────────────────────────────────────
 -- PHOTO_METADATA: Personal photo library for post visuals
 -- ───────────────────────────────────────────────────────────────────────────
-CREATE TABLE photo_metadata (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+-- DATABASE FIX 2.1: photo_metadata table REMOVED as duplicate of author_photos
+-- All photo metadata is now stored in author_photos table only.
+-- Migration script to consolidate data:
+-- INSERT INTO author_photos (file_path, file_name, ...) SELECT * FROM photo_metadata ON CONFLICT DO NOTHING;
+-- DROP TABLE IF EXISTS photo_metadata;
 
-    -- File info
-    file_path TEXT UNIQUE NOT NULL,
-    file_name TEXT NOT NULL,
+-- DATABASE FIX 2.1: Add missing fields and constraints to author_photos
+ALTER TABLE author_photos
+    ADD COLUMN IF NOT EXISTS notes TEXT,
+    ADD COLUMN IF NOT EXISTS dominant_colors TEXT[] DEFAULT '{}',
+    ADD CONSTRAINT author_photos_file_path_unique UNIQUE (file_path);
 
-    -- Auto-tagged properties (from AI analysis)
-    setting TEXT,                           -- office, outdoor, conference, casual
-    pose TEXT,                              -- standing, sitting, speaking, working
-    mood TEXT,                              -- professional, friendly, thoughtful, energetic
-    attire TEXT,                            -- formal, business_casual, casual
-    background TEXT,                        -- plain, office, nature, event
-    face_position TEXT,                     -- center, left_third, right_third
-    eye_contact BOOLEAN DEFAULT TRUE,
+-- DATABASE FIX 2.1: Standardize eye_contact type to TEXT with constraint
+ALTER TABLE author_photos
+    ALTER COLUMN eye_contact TYPE TEXT;
 
-    -- Suitability tags
-    suitable_for TEXT[] DEFAULT '{}',       -- enterprise_case, primary_source, etc.
+ALTER TABLE author_photos
+    ADD CONSTRAINT valid_eye_contact
+    CHECK (eye_contact IN ('direct', 'away', 'profile'));
 
-    -- Technical properties
-    width INTEGER,
-    height INTEGER,
-    aspect_ratio TEXT,                      -- 1:1, 4:3, 16:9
-    file_size_kb INTEGER,
-    dominant_colors TEXT[] DEFAULT '{}',
-
-    -- Usage tracking
-    times_used INTEGER DEFAULT 0,
-    last_used_date TIMESTAMPTZ,
-    last_used_post_id UUID REFERENCES posts(id) ON DELETE SET NULL,
-
-    -- Manual overrides
-    favorite BOOLEAN DEFAULT FALSE,
-    disabled BOOLEAN DEFAULT FALSE,
-    custom_tags TEXT[] DEFAULT '{}',
-    notes TEXT,
-
-    -- Timestamps
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_photo_setting ON photo_metadata(setting);
-CREATE INDEX idx_photo_pose ON photo_metadata(pose);
-CREATE INDEX idx_photo_mood ON photo_metadata(mood);
-CREATE INDEX idx_photo_times_used ON photo_metadata(times_used);
-CREATE INDEX idx_photo_suitable_for ON photo_metadata USING GIN(suitable_for);
-CREATE INDEX idx_photo_not_disabled ON photo_metadata(disabled) WHERE disabled = FALSE;
+-- Additional indexes for author_photos (migrated from photo_metadata)
+CREATE INDEX IF NOT EXISTS idx_author_photos_setting ON author_photos(setting);
+CREATE INDEX IF NOT EXISTS idx_author_photos_pose ON author_photos(pose);
+CREATE INDEX IF NOT EXISTS idx_author_photos_mood ON author_photos(mood);
+CREATE INDEX IF NOT EXISTS idx_author_photos_suitable_for ON author_photos USING GIN(suitable_for);
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- PIPELINE_ERRORS: Error tracking for post-mortem analysis
@@ -1387,12 +1539,16 @@ $$ LANGUAGE plpgsql;
 
 -- Percentile rank for likes at a given time checkpoint
 -- Returns what percent of posts this one outperformed (e.g., 90 = top 10%)
+-- DATABASE FIX 2.3: Fixed to handle empty data case properly
 CREATE OR REPLACE FUNCTION get_likes_percentile(likes_count INTEGER, minutes INTEGER)
 RETURNS TABLE (percentile FLOAT) AS $$
 BEGIN
     RETURN QUERY
     SELECT
-        (COUNT(*) FILTER (WHERE likes < likes_count)::FLOAT / NULLIF(COUNT(*), 0) * 100)::FLOAT as percentile
+        CASE
+            WHEN COUNT(*) = 0 THEN 50.0  -- Default to median if no data
+            ELSE (COUNT(*) FILTER (WHERE likes <= likes_count)::FLOAT / COUNT(*) * 100)::FLOAT
+        END as percentile
     FROM post_metrics
     WHERE minutes_after_post = minutes;
 END;
@@ -1469,6 +1625,28 @@ BEGIN
     WHERE id = p_photo_id;
 END;
 $$ LANGUAGE plpgsql;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- DATABASE FIX 2.4: Add Missing Composite Indexes
+-- ───────────────────────────────────────────────────────────────────────────
+
+-- For get_learnings_for_component (frequent query)
+CREATE INDEX idx_learnings_component_active_confidence
+ON learnings(affected_component, is_active, confidence DESC)
+WHERE is_active = TRUE AND confidence >= 0.5;
+
+-- For experiments queries
+CREATE INDEX idx_experiments_completed
+ON experiments(completed_at DESC)
+WHERE status = 'completed';
+
+-- For post_metrics percentile queries
+CREATE INDEX idx_metrics_minutes
+ON post_metrics(minutes_after_post);
+
+-- For research reports
+CREATE INDEX idx_research_trigger
+ON research_reports(trigger_type);
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- ROW LEVEL SECURITY (optional, for multi-tenant)
@@ -1560,6 +1738,37 @@ class ClaudeCodeCLI:
                 "Install with: npm install -g @anthropic-ai/claude-code"
             )
 
+    def _sanitize_prompt(self, prompt: str) -> str:
+        """Remove potentially dangerous patterns from prompts.
+
+        SECURITY FIX 1.1: Prevents prompt injection attacks by removing
+        patterns that could be interpreted as shell commands.
+        """
+        import re
+        dangerous_patterns = [
+            r'`.*`',           # Backtick command substitution
+            r'\$\(.*\)',       # $(command) substitution
+            r';\s*\w+',        # Command chaining
+            r'\|\s*\w+',       # Pipe to another command
+            r'>\s*/',          # Output redirection to root
+        ]
+        sanitized = prompt
+        for pattern in dangerous_patterns:
+            sanitized = re.sub(pattern, '', sanitized)
+        return sanitized
+
+    def _validate_context_file(self, file: Path) -> bool:
+        """Validate file is within allowed directory.
+
+        SECURITY FIX 1.2: Prevents path traversal attacks by ensuring
+        context files are within the working directory.
+        """
+        try:
+            resolved = file.resolve()
+            return resolved.is_relative_to(self.working_dir.resolve())
+        except ValueError:
+            return False
+
     async def generate(
         self,
         prompt: str,
@@ -1585,8 +1794,11 @@ class ClaudeCodeCLI:
             full_prompt += f"<system>\n{system_prompt}\n</system>\n\n"
 
         # Add context files (no --file flag exists, must include content in prompt)
+        # SECURITY FIX 1.2: Validate path traversal before reading
         if context_files:
             for file in context_files:
+                if not self._validate_context_file(file):
+                    raise SecurityError(f"Path traversal attempt: {file}")
                 if file.exists():
                     try:
                         content = file.read_text(encoding='utf-8')
@@ -1599,7 +1811,7 @@ class ClaudeCodeCLI:
 
         cmd = [
             "claude",
-            "-p", full_prompt,  # -p is the correct flag for prompt
+            "-p", self._sanitize_prompt(full_prompt),  # SECURITY FIX 1.1: Sanitize prompt
             "--output-format", "text",  # Get text output
         ]
 
@@ -2068,13 +2280,18 @@ class ThresholdConfig:
     # CONTENT-TYPE MULTIPLIERS (not absolute values!)
     # This allows type-specific adjustments while maintaining
     # consistent relative thresholds.
+    #
+    # STATE MACHINE FIX 4.5: Fixed multipliers to ensure pass_threshold
+    # is always higher than revision_threshold (7.0 base).
+    # Previous values for COMMUNITY_CONTENT (0.85) resulted in 6.8 pass,
+    # which was BELOW the 7.0 revision threshold - logical error.
     # ─────────────────────────────────────────────────────────────────
     type_multipliers: Dict[ContentType, float] = field(default_factory=lambda: {
-        ContentType.ENTERPRISE_CASE: 0.90,      # 8.0 * 0.90 = 7.2 effective
-        ContentType.PRIMARY_SOURCE: 0.9375,     # 8.0 * 0.9375 = 7.5 effective
-        ContentType.AUTOMATION_CASE: 0.875,     # 8.0 * 0.875 = 7.0 effective
-        ContentType.COMMUNITY_CONTENT: 0.85,    # 8.0 * 0.85 = 6.8 effective
-        ContentType.TOOL_RELEASE: 0.875,        # 8.0 * 0.875 = 7.0 effective
+        ContentType.ENTERPRISE_CASE: 0.90,      # 8.0 * 0.90 = 7.2 pass, 6.3 revise, 4.95 reject
+        ContentType.PRIMARY_SOURCE: 0.9375,     # 8.0 * 0.9375 = 7.5 pass
+        ContentType.AUTOMATION_CASE: 0.90,      # FIX: Changed from 0.875 to 0.90
+        ContentType.COMMUNITY_CONTENT: 0.90,    # FIX: Changed from 0.85 to 0.90 (was 6.8, now 7.2)
+        ContentType.TOOL_RELEASE: 0.90,         # FIX: Changed from 0.875 to 0.90
     })
 
     # Max revisions by content type
@@ -4603,6 +4820,15 @@ class HookStyle(Enum):
     FIRST_LOOK = "first_look"                # "I tested it" angle
     IMPLICATIONS = "implications"            # "What this means for X"
 
+    # ─────────────────────────────────────────────────────────────────
+    # AGENT CONSISTENCY FIX 5.1: Additional universal hook styles
+    # These were referenced in hooks_prompt but not in enum
+    # ─────────────────────────────────────────────────────────────────
+    STORY = "story"                          # Lead with narrative
+    INDUSTRY_IMPACT = "industry_impact"      # "What this means for industry"
+    EXPERT_QUOTE = "expert_quote"            # Lead with authoritative quote
+    TREND_ANALYSIS = "trend_analysis"        # Analyze market/tech trend
+
 
 class VisualType(str, Enum):
     """
@@ -5724,13 +5950,23 @@ generic_analysis_prompts = {
 #### Output Schema
 
 ```python
+# AGENT CONSISTENCY FIX 5.5: Define standard score types
+Score01 = NewType('Score01', float)  # 0.0 to 1.0 scale
+Score10 = NewType('Score10', float)  # 0.0 to 10.0 scale
+
+
 @dataclass
 class Insight:
     statement: str  # One sentence insight
     explanation: str  # Why it matters
-    wow_factor: int  # 1-10
+    wow_factor: Score10  # AGENT CONSISTENCY FIX 5.5: Was int, now Score10 (0.0-10.0)
     hook_angle: str  # Suggested hook style for this insight
     source_quote: Optional[str]  # Supporting quote from source
+
+    def __post_init__(self):
+        """Validate wow_factor is in range."""
+        if not 0 <= self.wow_factor <= 10:
+            raise ValueError(f"wow_factor must be 0-10, got {self.wow_factor}")
 
 
 @dataclass
@@ -7003,6 +7239,16 @@ templates = {
 #### Type-Specific Generation Prompts
 
 ```python
+# AUTHOR PROFILE FIX 9.2: Base constraints that apply to ALL content types
+BASE_GENERATION_CONSTRAINTS = """
+CONSTRAINTS (apply to ALL content types):
+- Hook MUST fit in 210 chars (before "see more" cutoff)
+- Maximum {max_emojis} emojis (from style guide)
+- Line breaks: After every 1-2 sentences for mobile readability
+- Hashtags: 3-5 total, mix of broad and specific
+- CTA: Must have clear call-to-action
+"""
+
 generation_prompts_by_type = {
     ContentType.ENTERPRISE_CASE: """
     Write a LinkedIn post about this enterprise AI case study.
@@ -7230,6 +7476,63 @@ type_specific_ctas = {
         "Tag someone who should check this out."
     ]
 }
+
+
+def replace_cta_placeholders(cta: str, brief: "AnalysisBrief") -> str:
+    """Replace placeholders in CTA templates with actual values.
+
+    AUTHOR PROFILE FIX 9.3: CTA templates contain placeholders like {topic}
+    that need to be replaced with actual values before use.
+    """
+    replacements = {
+        "{topic}": brief.topic if hasattr(brief, 'topic') and brief.topic else "this topic",
+        "{claim}": brief.key_insights[0].statement if brief.key_insights else "this insight",
+        "{tool}": _extract_tool_name(brief),
+        "{company}": _extract_company_name(brief),
+        "{metric}": _extract_key_metric(brief),
+    }
+
+    result = cta
+    for placeholder, value in replacements.items():
+        result = result.replace(placeholder, value)
+
+    # Warn if unreplaced placeholders remain
+    if "{" in result:
+        import logging
+        logging.getLogger("CTAGenerator").warning(f"Unreplaced placeholder in CTA: {result}")
+
+    return result
+
+
+def _extract_tool_name(brief: "AnalysisBrief") -> str:
+    """Extract tool name from brief for CTA placeholder."""
+    if hasattr(brief, 'content_type') and brief.content_type == ContentType.TOOL_RELEASE:
+        extraction = brief.type_specific_extraction
+        if extraction and hasattr(extraction, 'tool_name'):
+            return extraction.tool_name
+    return "AI tool"
+
+
+def _extract_company_name(brief: "AnalysisBrief") -> str:
+    """Extract company name from brief for CTA placeholder."""
+    if hasattr(brief, 'content_type') and brief.content_type == ContentType.ENTERPRISE_CASE:
+        extraction = brief.type_specific_extraction
+        if extraction and hasattr(extraction, 'company'):
+            return extraction.company
+    return "the company"
+
+
+def _extract_key_metric(brief: "AnalysisBrief") -> str:
+    """Extract key metric from brief for CTA placeholder."""
+    if hasattr(brief, 'key_insights') and brief.key_insights:
+        # Try to find a metric in the first insight
+        statement = brief.key_insights[0].statement
+        import re
+        match = re.search(r'\d+%?', statement)
+        if match:
+            return match.group(0)
+    return "impressive results"
+
 
 type_specific_hashtag_strategies = {
     ContentType.ENTERPRISE_CASE: {
@@ -7810,15 +8113,22 @@ class HumanizedPost:
 
     # ─────────────────────────────────────────────────────────────────
     # TEMPLATE METADATA (preserve for analytics)
+    # AGENT CONSISTENCY FIX 5.2: Match types with DraftPost
     # ─────────────────────────────────────────────────────────────────
-    template_used: Optional[str] = None
-    hook_style: Optional[str] = None
+    hook_style: Optional[HookStyle] = None  # FIX: Was Optional[str], now matches DraftPost
+    template_used: str = ""                  # FIX: Was Optional[str], now matches DraftPost
+    template_category: str = ""              # ADDED: Missing from DraftPost
+
+    # AGENT CONSISTENCY FIX 5.2: Missing fields from DraftPost
+    estimated_read_time: str = ""
+    type_data_injected: Dict[str, Any] = field(default_factory=dict)
 
     # Changes made
     changes_log: List[str] = field(default_factory=list)  # What was changed and why
     ai_patterns_removed: List[str] = field(default_factory=list)
     human_markers_added: List[str] = field(default_factory=list)
     type_specific_adjustments: List[str] = field(default_factory=list)
+    humanization_changes: List[str] = field(default_factory=list)  # ADDED
 
     # Quality metrics (calculated by helper functions below)
     humanness_score: float = 0.0       # 0-10
@@ -9034,24 +9344,11 @@ def _detect_product_category(mentioned_products: List[str]) -> str:
         return "generic"
 
 
-def _select_composition_mode(content_type: ContentType, post_content: str) -> str:
-    """Select visual composition mode based on content type and post."""
-    # Default composition modes by content type
-    type_compositions = {
-        ContentType.ENTERPRISE_CASE: "split_screen",  # Person + interface
-        ContentType.PRIMARY_SOURCE: "overlay",  # Data overlay on photo
-        ContentType.AUTOMATION_CASE: "workflow",  # Workflow diagram style
-        ContentType.COMMUNITY_CONTENT: "quote_card",  # Quote with interface bg
-        ContentType.TOOL_RELEASE: "demo",  # Product demo style
-    }
-
-    # Override based on content signals
-    if "сравнение" in post_content.lower() or "vs" in post_content.lower():
-        return "comparison"
-    if "до и после" in post_content.lower() or "before" in post_content.lower():
-        return "before_after"
-
-    return type_compositions.get(content_type, "split_screen")
+# AGENT CONSISTENCY FIX 5.3: REMOVED DUPLICATE _select_composition_mode
+# The canonical version is defined below (after ImageGenerationError class)
+# with the correct composition keys that match composition_instructions.
+# This duplicate had different key names (split_screen vs split_view, etc.)
+# which caused composition_instructions lookup failures.
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -10980,6 +11277,7 @@ class PipelineState(TypedDict):
     # ═══════════════════════════════════════════════════════════════════
     # VISUAL CREATOR STAGE
     # ═══════════════════════════════════════════════════════════════════
+    visual_brief: Optional[str]  # STATE MACHINE FIX 4.4: Visual brief for image generation
     visual_asset: Optional[VisualAsset]
     visual_creator_output: Optional[VisualCreatorOutput]
     visual_format_used: Optional[str]  # metrics_card / workflow_diagram / etc.
@@ -11977,7 +12275,8 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
         "draft_post": writer_output.draft,
         "writer_output": writer_output,
         "template_used": writer_output.draft.template_used,
-        "hook_style_used": writer_output.draft.hook_style
+        "hook_style_used": writer_output.draft.hook_style,
+        "current_revision_target": None  # STATE MACHINE FIX 4.3: Clear after processing
     }
 
 
@@ -12105,7 +12404,8 @@ async def humanizer_node(state: PipelineState) -> Dict[str, Any]:
     return {
         "humanized_post": humanized_post,
         "humanization_intensity": intensity,
-        "stage": "humanized"
+        "stage": "humanized",
+        "current_revision_target": None  # STATE MACHINE FIX 4.3: Clear after processing
     }
 
 
@@ -12257,9 +12557,13 @@ async def prepare_for_human_approval(state: PipelineState) -> Dict[str, Any]:
     }
 
 
+@with_error_handling(node_name="reset_for_restart")
+@with_timeout(node_name="reset_for_restart")
 async def reset_for_restart_node(state: PipelineState) -> Dict[str, Any]:
     """
     Reset state for a fresh topic restart after reject.
+
+    STATE MACHINE FIX 4.1: Added missing error handling decorators.
 
     This node prevents infinite reject_restart loops by:
     1. Incrementing _reject_restart_count (checked by route_after_qc)
@@ -12459,17 +12763,49 @@ def route_after_qc(state: PipelineState) -> str:
         return "reject_restart"
 
     else:  # revise
-        # Determine revision target from QC output
-        next_step = (
-            qc_output.get("next_step") if isinstance(qc_output, dict)
-            else getattr(qc_output, "next_step", "revise_writer")
-        )
+        # STATE MACHINE FIX 4.2: Intelligent revision target based on failed criteria
+        next_step = determine_revision_target(qc_output)
+        return next_step
 
-        # Map to valid route names
-        if next_step in ["revise_writer", "revise_humanizer", "revise_visual"]:
-            return next_step
-        else:
-            return "revise_writer"  # Default
+
+def determine_revision_target(qc_output) -> str:
+    """Determine which agent should handle revision based on failed criteria.
+
+    STATE MACHINE FIX 4.2: Instead of always defaulting to Writer, analyze
+    which criteria scored lowest and route to the appropriate agent.
+    """
+    # Get scores from qc_output
+    if isinstance(qc_output, dict):
+        result = qc_output.get("result", {})
+        scores = result.get("universal_scores", {}) if isinstance(result, dict) else {}
+    else:
+        result = getattr(qc_output, "result", None)
+        scores = getattr(result, "universal_scores", {}) if result else {}
+
+    if not scores:
+        return "revise_writer"  # Default if no score data
+
+    # Define which criteria map to which agent
+    humanizer_criteria = {"humanness", "tone_match", "authenticity"}
+    visual_criteria = {"visual_match", "visual_quality"}
+    writer_criteria = {"hook_strength", "value_density", "specificity", "structure", "cta_clarity"}
+
+    # Find lowest scoring criterion
+    lowest_score = float('inf')
+    lowest_criterion = None
+
+    for criterion, score in scores.items():
+        if isinstance(score, (int, float)) and score < lowest_score:
+            lowest_score = score
+            lowest_criterion = criterion
+
+    # Route based on lowest criterion
+    if lowest_criterion in humanizer_criteria:
+        return "revise_humanizer"
+    elif lowest_criterion in visual_criteria:
+        return "revise_visual"
+    else:
+        return "revise_writer"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -12477,9 +12813,13 @@ def route_after_qc(state: PipelineState) -> str:
 # Executes AFTER every QC evaluation, BEFORE routing decision
 # ═══════════════════════════════════════════════════════════════════
 
+@with_error_handling(node_name="post_evaluation_learning")
+@with_timeout(node_name="post_evaluation_learning")
 async def post_evaluation_learning_node(state: PipelineState) -> dict:
     """
     Extract learnings from EVERY iteration, regardless of pass/fail.
+
+    STATE MACHINE FIX 4.1: Added missing error handling decorators.
 
     This is the heart of continuous self-improvement:
     - Learns from BOTH successful and failed posts
@@ -12995,7 +13335,10 @@ Track performance of published posts to:
 ```python
 @dataclass
 class PostMetricsSnapshot:
-    """Single snapshot of post metrics at a point in time."""
+    """Single snapshot of post metrics at a point in time.
+
+    ANALYTICS FIX 7.1: Added reactions_by_type field for detailed reaction tracking.
+    """
 
     post_id: str
     timestamp: datetime
@@ -13005,6 +13348,16 @@ class PostMetricsSnapshot:
     likes: int
     comments: int
     reposts: int
+
+    # ANALYTICS FIX 7.1: LinkedIn reaction types (not just total likes)
+    reactions_by_type: Dict[str, int] = field(default_factory=lambda: {
+        "LIKE": 0,
+        "CELEBRATE": 0,
+        "SUPPORT": 0,
+        "LOVE": 0,
+        "INSIGHTFUL": 0,
+        "FUNNY": 0,
+    })
 
     # Extended metrics (if available)
     impressions: Optional[int] = None
@@ -13025,6 +13378,29 @@ class PostMetricsSnapshot:
     # ─────────────────────────────────────────────────────────────────
     scheduled_checkpoint: Optional[int] = None  # e.g., 15, 30, 60, 180, 1440, 2880
     collection_drift_seconds: Optional[int] = None  # Difference between scheduled and actual
+
+
+def _parse_reactions(reactions_data: List[dict]) -> Dict[str, int]:
+    """Parse LinkedIn reactions by type.
+
+    ANALYTICS FIX 7.1: Extract individual reaction types instead of just totals.
+    """
+    reactions_by_type = {
+        "LIKE": 0,
+        "CELEBRATE": 0,
+        "SUPPORT": 0,
+        "LOVE": 0,
+        "INSIGHTFUL": 0,
+        "FUNNY": 0,
+    }
+
+    for r in reactions_data:
+        rtype = r.get('reactionType', 'LIKE')
+        count = r.get('count', 0)
+        if rtype in reactions_by_type:
+            reactions_by_type[rtype] += count
+
+    return reactions_by_type
 
 
 @dataclass
@@ -13133,6 +13509,83 @@ class AnalyticsInsight:
     # For automatic adjustment
     parameter_to_adjust: Optional[str]
     suggested_value: Optional[Any]
+
+
+class InsightApplicator:
+    """Apply analytics insights to system components.
+
+    ANALYTICS FIX 7.2: Implements the missing InsightApplicator class
+    that was referenced but not implemented.
+    """
+
+    def __init__(self, config_manager, prompt_manager):
+        self.config = config_manager
+        self.prompts = prompt_manager
+
+        self._component_handlers = {
+            "trend_scout": self._apply_to_trend_scout,
+            "writer": self._apply_to_writer,
+            "visual_creator": self._apply_to_visual_creator,
+            "scheduler": self._apply_to_scheduler,
+        }
+
+    async def apply(self, insight: AnalyticsInsight) -> bool:
+        """Apply insight to affected component."""
+        if insight.confidence < 0.7:
+            import logging
+            logging.getLogger("InsightApplicator").warning(
+                f"Insight confidence too low: {insight.confidence}"
+            )
+            return False
+
+        handler = self._component_handlers.get(insight.affected_component)
+        if not handler:
+            import logging
+            logging.getLogger("InsightApplicator").error(
+                f"Unknown component: {insight.affected_component}"
+            )
+            return False
+
+        return await handler(insight)
+
+    async def _apply_to_trend_scout(self, insight: AnalyticsInsight) -> bool:
+        """Apply insight to Trend Scout scoring weights."""
+        if insight.parameter_to_adjust and insight.suggested_value:
+            current_config = self.config.get("trend_scout")
+            if "scoring_weights" in current_config:
+                current_config["scoring_weights"][insight.parameter_to_adjust] = insight.suggested_value
+                await self.config.save("trend_scout", current_config)
+                return True
+        return False
+
+    async def _apply_to_writer(self, insight: AnalyticsInsight) -> bool:
+        """Apply insight to Writer configuration or prompts."""
+        if insight.parameter_to_adjust == "prompt_addition":
+            # Add insight to writer prompts
+            current_prompts = self.prompts.get("writer")
+            if insight.suggested_value:
+                updated = current_prompts + f"\n\nLEARNED: {insight.suggested_value}"
+                await self.prompts.save("writer", updated)
+                return True
+        return False
+
+    async def _apply_to_visual_creator(self, insight: AnalyticsInsight) -> bool:
+        """Apply insight to Visual Creator configuration."""
+        if insight.parameter_to_adjust and insight.suggested_value:
+            current_config = self.config.get("visual_creator")
+            current_config[insight.parameter_to_adjust] = insight.suggested_value
+            await self.config.save("visual_creator", current_config)
+            return True
+        return False
+
+    async def _apply_to_scheduler(self, insight: AnalyticsInsight) -> bool:
+        """Apply insight to Scheduler (e.g., optimal posting times)."""
+        if insight.parameter_to_adjust and insight.suggested_value:
+            current_config = self.config.get("scheduler")
+            current_config[insight.parameter_to_adjust] = insight.suggested_value
+            await self.config.save("scheduler", current_config)
+            return True
+        return False
 ```
 
 ---
@@ -13809,6 +14262,42 @@ class MetricsScheduler:
 
         if snapshot.likes > avg.likes * 2:
             print(f"🔥 Post on fire! {snapshot.likes} likes ({snapshot.likes/avg.likes:.1f}x avg)")
+
+    async def recover_missed_checkpoints(self):
+        """Recover metrics for posts with missed checkpoints.
+
+        ANALYTICS FIX 7.3: Implements recovery for posts with gaps in checkpoint data.
+        Call periodically from scheduler to catch missed collections.
+        """
+        import logging
+        logger = logging.getLogger("MetricsScheduler")
+
+        # Find posts with gaps in checkpoints
+        incomplete = await self.db.get_posts_with_incomplete_metrics()
+
+        recovered_count = 0
+        for post in incomplete:
+            collected = set(m["scheduled_checkpoint"] for m in post.get("metrics", []))
+            expected = set(self.COLLECTION_SCHEDULE)
+
+            # Find reasonable gaps (within 24 hours of post)
+            post_age_minutes = (utc_now() - post["published_at"]).total_seconds() / 60
+
+            for checkpoint in expected - collected:
+                # Only recover if we're within 24h window after the checkpoint should have run
+                if checkpoint <= post_age_minutes <= checkpoint + 1440:
+                    try:
+                        await self._collect_and_store(
+                            post["linkedin_urn"],
+                            checkpoint
+                        )
+                        recovered_count += 1
+                        logger.info(f"[RECOVERY] Collected missed checkpoint {checkpoint}min for {post['id']}")
+                    except Exception as e:
+                        logger.error(f"[RECOVERY] Failed to recover {checkpoint}min for {post['id']}: {e}")
+
+        if recovered_count > 0:
+            logger.info(f"[RECOVERY] Recovered metrics for {recovered_count} missed checkpoints")
 ```
 
 ---
@@ -14106,6 +14595,19 @@ class LearningSource(Enum):
 
 
 @dataclass
+class LearningSnapshot:
+    """Snapshot of learning state for rollback.
+
+    SELF-IMPROVEMENT FIX 8.2: Enables rollback to previous state if
+    learnings cause degraded performance.
+    """
+    timestamp: datetime
+    learnings: Dict[str, "MicroLearning"]
+    prompts: Dict[str, str]
+    trigger: str  # Why snapshot was taken
+
+
+@dataclass
 class MicroLearning:
     """
     Single unit of learning acquired during iteration.
@@ -14135,6 +14637,11 @@ class MicroLearning:
     # Promotion tracking
     is_promoted_to_rule: bool = False       # High confidence → permanent rule
 
+    # SELF-IMPROVEMENT FIX 8.3: Bootstrap and expiration tracking
+    is_bootstrap: bool = False              # True if this is a bootstrap learning
+    expires_at: Optional[datetime] = None   # None = never expires
+    is_active: bool = True                  # Can be deactivated without deletion
+
     # Decay rate per day (0.01 = 1% per day, ~30% after 30 days)
     CONFIDENCE_DECAY_RATE: float = 0.01
 
@@ -14163,8 +14670,33 @@ class MicroLearning:
             if self.confidence < 0.7:
                 self.is_promoted_to_rule = False
 
+    # SELF-IMPROVEMENT FIX 8.1: Rate limiting for confirmations
+    MIN_CONFIRMATION_INTERVAL_HOURS = 24
+
     def confirm(self):
-        """Called when evidence supports this learning."""
+        """Called when evidence supports this learning.
+
+        SELF-IMPROVEMENT FIX 8.1: Added rate limiting to prevent 5 quick
+        confirmations from promoting a learning to rule status.
+        """
+        import logging
+        logger = logging.getLogger("MicroLearning")
+
+        # SELF-IMPROVEMENT FIX 8.1: Rate limiting
+        if self.last_confirmed_at:
+            hours_since = (utc_now() - self.last_confirmed_at).total_seconds() / 3600
+            if hours_since < self.MIN_CONFIRMATION_INTERVAL_HOURS:
+                logger.info(
+                    f"Confirmation rate limited: {hours_since:.1f}h < "
+                    f"{self.MIN_CONFIRMATION_INTERVAL_HOURS}h"
+                )
+                return
+
+        # SELF-IMPROVEMENT FIX 8.1: Require real engagement data before promotion
+        if self.confirmations >= 4 and not self._has_engagement_validation():
+            logger.warning("Cannot promote to rule without engagement validation")
+            return
+
         self.confirmations += 1
         self.last_confirmed_at = utc_now()
         # Confidence grows logarithmically (diminishing returns)
@@ -14173,6 +14705,14 @@ class MicroLearning:
         # Promote to rule if very confident
         if self.confidence >= 0.9 and self.confirmations >= 5:
             self.is_promoted_to_rule = True
+
+    def _has_engagement_validation(self) -> bool:
+        """Check if this learning has been validated against real engagement.
+
+        SELF-IMPROVEMENT FIX 8.1: Learnings from QC feedback alone shouldn't
+        be promoted without real-world engagement validation.
+        """
+        return self.source == LearningSource.POST_PERFORMANCE
 
     def contradict(self):
         """Called when evidence contradicts this learning."""
@@ -14349,6 +14889,10 @@ class ContinuousLearningEngine:
         self.learnings: Dict[str, MicroLearning] = {}
         self._load_learnings()
 
+        # SELF-IMPROVEMENT FIX 8.2: Snapshot history for rollback
+        self.snapshots: List["LearningSnapshot"] = []
+        self.MAX_SNAPSHOTS = 10
+
     def _load_learnings(self):
         """Load existing learnings from database."""
         stored = self.db.get_all_learnings()
@@ -14493,6 +15037,61 @@ class ContinuousLearningEngine:
         )
 
         return result
+
+    def create_snapshot(self, trigger: str):
+        """Create snapshot before significant changes.
+
+        SELF-IMPROVEMENT FIX 8.2: Save state before major modifications.
+        """
+        from copy import deepcopy
+        import logging
+        logger = logging.getLogger("ContinuousLearningEngine")
+
+        snapshot = LearningSnapshot(
+            timestamp=utc_now(),
+            learnings=deepcopy(self.learnings),
+            prompts=self.prompt_manager.get_all_prompts(),
+            trigger=trigger
+        )
+        self.snapshots.append(snapshot)
+        if len(self.snapshots) > self.MAX_SNAPSHOTS:
+            self.snapshots.pop(0)
+        logger.info(f"[SNAPSHOT] Created learning snapshot: {trigger}")
+
+    async def rollback_to_snapshot(self, snapshot_index: int = -1):
+        """Rollback to a previous snapshot.
+
+        SELF-IMPROVEMENT FIX 8.2: Restore previous state if learnings
+        caused degraded performance.
+
+        Args:
+            snapshot_index: Index of snapshot to restore (-1 for most recent)
+
+        Raises:
+            ValueError: If no snapshots available
+        """
+        from copy import deepcopy
+        import logging
+        logger = logging.getLogger("ContinuousLearningEngine")
+
+        if not self.snapshots:
+            raise ValueError("No snapshots available for rollback")
+
+        snapshot = self.snapshots[snapshot_index]
+
+        # Restore learnings
+        self.learnings = deepcopy(snapshot.learnings)
+
+        # Restore prompts
+        for component, prompt in snapshot.prompts.items():
+            self.prompt_manager.set_prompt(component, prompt)
+
+        # Persist to database
+        await self.db.restore_learnings(list(self.learnings.values()))
+
+        logger.warning(
+            f"[ROLLBACK] Rolled back to snapshot from {snapshot.timestamp}: {snapshot.trigger}"
+        )
 
     async def _extract_learning_from_feedback(
         self,
@@ -14743,12 +15342,20 @@ class ContinuousLearningEngine:
         """
         Special handling for the VERY FIRST post.
         Bootstrap with general best practices from research.
+
+        SELF-IMPROVEMENT FIX 8.3: Added expiration and is_bootstrap flag
+        to prevent bootstrap learnings from being treated as confirmed rules.
         """
 
         # Check if this is first post
         post_count = await self.db.get_total_post_count()
         if post_count > 0:
             return []  # Not first post
+
+        # SELF-IMPROVEMENT FIX 8.3: Bootstrap learnings expire after 30 days
+        # and start with confidence below application threshold
+        BOOTSTRAP_EXPIRY_DAYS = 30
+        BOOTSTRAP_CONFIDENCE = 0.5  # Below 0.6 application threshold
 
         # Bootstrap with proven best practices
         bootstrap_learnings = [
@@ -14759,8 +15366,10 @@ class ContinuousLearningEngine:
                 description="Posts with specific numbers in hooks get 40% more engagement",
                 rule="include_specific_number_in_first_line",
                 affected_component="writer",
-                confidence=0.7,  # High confidence from research
-                is_promoted_to_rule=False  # Will be promoted after confirmation
+                confidence=BOOTSTRAP_CONFIDENCE,  # FIX 8.3: Below threshold initially
+                is_promoted_to_rule=False,
+                is_bootstrap=True,  # FIX 8.3: Mark as bootstrap
+                expires_at=utc_now() + timedelta(days=BOOTSTRAP_EXPIRY_DAYS),  # FIX 8.3: Add expiration
             ),
             MicroLearning(
                 id="bootstrap_photo_face",
@@ -14769,7 +15378,9 @@ class ContinuousLearningEngine:
                 description="Photos showing author's face increase trust and engagement",
                 rule="prefer_author_photo_when_personal",
                 affected_component="visual_creator",
-                confidence=0.7,
+                confidence=BOOTSTRAP_CONFIDENCE,
+                is_bootstrap=True,
+                expires_at=utc_now() + timedelta(days=BOOTSTRAP_EXPIRY_DAYS),
             ),
             MicroLearning(
                 id="bootstrap_short_paragraphs",
@@ -14778,7 +15389,9 @@ class ContinuousLearningEngine:
                 description="Short paragraphs (1-2 sentences) improve scannability on mobile",
                 rule="max_2_sentences_per_paragraph",
                 affected_component="writer",
-                confidence=0.8,
+                confidence=BOOTSTRAP_CONFIDENCE,
+                is_bootstrap=True,
+                expires_at=utc_now() + timedelta(days=BOOTSTRAP_EXPIRY_DAYS),
             ),
             MicroLearning(
                 id="bootstrap_enterprise_roi",
@@ -14787,8 +15400,10 @@ class ContinuousLearningEngine:
                 description="Enterprise case studies must mention ROI in first 3 lines",
                 rule="enterprise_hook_must_have_roi_or_metric",
                 affected_component="writer",
-                confidence=0.8,
-                content_type=ContentType.ENTERPRISE_CASE
+                confidence=BOOTSTRAP_CONFIDENCE,
+                content_type=ContentType.ENTERPRISE_CASE,
+                is_bootstrap=True,
+                expires_at=utc_now() + timedelta(days=BOOTSTRAP_EXPIRY_DAYS),
             ),
             # More bootstrap learnings...
         ]
@@ -14796,7 +15411,7 @@ class ContinuousLearningEngine:
         for learning in bootstrap_learnings:
             self.learnings[learning.id] = learning
 
-        await self.db.save_learnings(bootstrap_learnings)
+        await self.db.save_learnings([l.__dict__ for l in bootstrap_learnings])
 
         return bootstrap_learnings
 ```
@@ -15439,16 +16054,29 @@ class CodeGenerationEngine:
 
     def _is_safe_package_name(self, name: str) -> bool:
         """
-        Validate package name using allowlist.
-        Validate package name using allowlist. Regex validation is bypassable; use strict allowlist instead.
+        Validate package name using allowlist and packaging library.
+
+        SECURITY FIX 1.5: Use packaging library for proper validation.
+        Regex validation is bypassable; version specifiers and PEP 508 markers
+        can contain malicious content.
         """
-        import re
-        # Extract base package name (before version specifier or extras)
-        match = re.match(r'^([a-zA-Z0-9_-]+)', name)
-        if not match:
+        from packaging.requirements import Requirement, InvalidRequirement
+
+        try:
+            req = Requirement(name)
+            base_name = req.name.lower().replace('_', '-')
+
+            # SECURITY FIX 1.5: Reject any extras (security risk)
+            if req.extras:
+                return False
+
+            # SECURITY FIX 1.5: Reject any markers (security risk)
+            if req.marker:
+                return False
+
+            return base_name in self.ALLOWED_PACKAGES
+        except InvalidRequirement:
             return False
-        base_name = match.group(1).lower().replace('_', '-')
-        return base_name in self.ALLOWED_PACKAGES
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -15557,12 +16185,35 @@ class CodeValidator:
         - "exe" + "c"
         - __dict__['__import__']
         will still be caught because AST sees the actual structure.
+
+        SECURITY FIX 1.3: Added unicode normalization and additional bypass patterns.
         """
         import logging
+        import unicodedata
+        import re
         logger = logging.getLogger("CodeValidation")
 
+        # SECURITY FIX 1.3: Normalize unicode before parsing to prevent bypass
+        normalized_code = unicodedata.normalize('NFKC', code)
+
+        # SECURITY FIX 1.3: Additional dangerous patterns to check before AST
+        dangerous_patterns = [
+            r'__loader__',
+            r'__spec__',
+            r'__class__\.__bases__',
+            r'types\.FunctionType',
+            r'types\.CodeType',
+            r'b64decode',
+            r'codecs\.decode',
+        ]
+
+        for pattern in dangerous_patterns:
+            if re.search(pattern, normalized_code):
+                logger.error(f"Dangerous pattern detected: {pattern}")
+                return False
+
         try:
-            tree = ast.parse(code)
+            tree = ast.parse(normalized_code)
         except SyntaxError:
             # Already caught by _check_syntax, but be defensive
             return False
@@ -15665,6 +16316,20 @@ class CodeValidator:
 
         return True
 
+    def _get_minimal_env(self, sandbox_path: Path) -> dict:
+        """Return minimal safe environment for sandbox execution.
+
+        SECURITY FIX 1.4: Don't copy ALL environment variables as **os.environ
+        would expose secrets (API keys, tokens, etc.) to sandbox code.
+        """
+        return {
+            "PYTHONPATH": str(sandbox_path),
+            "HOME": os.environ.get("HOME", "/tmp"),
+            "PATH": "/usr/bin:/bin",
+            "LANG": "en_US.UTF-8",
+            # Explicitly DO NOT include API keys, tokens, etc.
+        }
+
     async def _run_sandbox_tests(self, generated: GeneratedCode) -> bool:
         """Run generated tests in a sandbox."""
         try:
@@ -15681,13 +16346,14 @@ class CodeValidator:
                 test_path.write_text(generated.test_code, encoding="utf-8")
 
                 # Run pytest
+                # SECURITY FIX 1.4: Use minimal environment instead of **os.environ
                 result = subprocess.run(
                     [sys.executable, "-m", "pytest", str(test_path), "-v", "--tb=short"],
                     capture_output=True,
                     text=True,
                     timeout=60,
                     cwd=sandbox,
-                    env={**os.environ, "PYTHONPATH": str(sandbox_path)}
+                    env=self._get_minimal_env(sandbox_path)
                 )
 
                 return result.returncode == 0
@@ -19181,7 +19847,9 @@ class SelfModificationEngine:
         auto_apply: bool = True
     ) -> List[ModificationRecord]:
         """
-        Apply recommendations from research.
+        Apply recommendations from research with autonomy checks.
+
+        SAFETY FIX 3.1: Now checks AutonomyManager before auto-applying modifications.
 
         Args:
             recommendations: List of {"component": str, "change": str, "priority": int}
@@ -19192,6 +19860,9 @@ class SelfModificationEngine:
         """
 
         records = []
+
+        # SAFETY FIX 3.1: Get autonomy manager for approval checks
+        autonomy_mgr = await get_autonomy_manager()
 
         for rec in recommendations:
             component = rec["component"]
@@ -19215,13 +19886,34 @@ class SelfModificationEngine:
                 research_report_id=rec.get("research_id", "manual")
             )
 
+            # SAFETY FIX 3.1: Check if auto-apply is allowed at current autonomy level
             if auto_apply:
-                await self._apply_modification(record)
-                await self.db.save_modification(record)
+                needs_approval = await autonomy_mgr.requires_human_approval(
+                    action="modification",
+                    score=rec.get("confidence", 0.5)
+                )
+
+                if needs_approval:
+                    # Store for human review instead of auto-applying
+                    await self._store_pending_modification(record)
+                    record.status = "pending_approval"
+                else:
+                    await self._apply_modification(record)
+                    record.status = "applied"
+                    await self.db.save_modification(record)
+            else:
+                await self._store_pending_modification(record)
+                record.status = "pending_approval"
 
             records.append(record)
 
         return records
+
+    async def _store_pending_modification(self, record: ModificationRecord):
+        """Store modification for human review."""
+        record.status = "pending_approval"
+        record.expires_at = utc_now() + timedelta(hours=24)
+        await self.db.save_pending_modification(record.__dict__)
 
     async def _generate_modification(self, recommendation: dict) -> Optional[dict]:
         """Generate specific modification from recommendation."""
@@ -19624,21 +20316,25 @@ class MetaAgent:
     """
     Meta-agent that orchestrates self-improvement.
     Runs observation → evaluation → research → modification cycle.
+
+    SAFETY FIX 3.2: Now uses ModificationSafetySystem instead of direct modifier access.
     """
 
     def __init__(
         self,
         evaluator: SelfEvaluator,
         researcher: ResearchAgent,
-        modifier: SelfModificationEngine,
+        safety_system: ModificationSafetySystem,  # SAFETY FIX 3.2: Changed from modifier
         experimenter: ExperimentationEngine,
         db
     ):
         self.evaluator = evaluator
         self.researcher = researcher
-        self.modifier = modifier
+        self.safety = safety_system  # SAFETY FIX 3.2: Use safety system
         self.experimenter = experimenter
         self.db = db
+        self.modifications_applied = []
+        self.pending_modifications = []
 
     async def evaluate_draft(self, draft: str, context: dict) -> EvaluationResult:
         """
@@ -19682,20 +20378,39 @@ class MetaAgent:
             report = await self.researcher.research(trigger)
             await self.db.save_research_report(report)
 
-            # 3. Apply high-confidence recommendations
+            # 3. Apply high-confidence recommendations through safety system
+            # SAFETY FIX 3.2: Go through safety system instead of direct modifier
             high_confidence = [
                 r for r in report.recommendations
                 if r.get("confidence", 0) >= 0.8
             ]
 
             if high_confidence:
-                modifications = await self.modifier.apply_recommendations(
-                    high_confidence,
-                    auto_apply=True
-                )
+                for rec in high_confidence:
+                    result = await self.safety.request_modification(
+                        modification_type=rec.get("type", "config_change"),
+                        description=rec.get("description", rec.get("change", "")),
+                        proposed_change=rec,
+                        component=rec.get("component", "meta_agent"),
+                        risk_level=self._classify_risk(rec)
+                    )
+
+                    if result == "auto_applied":
+                        self.modifications_applied.append(rec)
+                    elif result == "pending_approval":
+                        self.pending_modifications.append(rec)
 
                 # Notify about changes
-                await self._notify_changes(modifications)
+                await self._notify_changes(self.modifications_applied)
+
+    def _classify_risk(self, rec: dict) -> str:
+        """Classify risk level of a recommendation."""
+        component = rec.get("component", "")
+        if component in ["prompt", "system_prompt"]:
+            return "medium"
+        elif component in ["threshold", "scoring"]:
+            return "high"
+        return "low"
 
         # 4. Check experiment status
         if self.experimenter.current_experiment:
@@ -20032,6 +20747,9 @@ class AutonomyManager:
         async with self._lock:
             return self._get_effective_level_unlocked(content_type)
 
+    # SAFETY FIX 3.3: Minimum safe score even at full autonomy
+    MIN_SAFE_SCORE = 5.0  # Even at full autonomy, don't publish garbage
+
     async def can_auto_publish(
         self,
         score: float,
@@ -20040,17 +20758,27 @@ class AutonomyManager:
         """
         Check if a post can be auto-published based on current autonomy level.
 
+        SAFETY FIX 3.3: Even at Level 4, enforces minimum quality threshold.
+
         Returns True if:
-        - Level 4 (full autonomy), OR
+        - Level 4 (full autonomy) AND score >= MIN_SAFE_SCORE, OR
         - Level 3 AND score >= auto_publish_threshold
         """
         level = await self.get_effective_level(content_type)
 
-        if level == AutonomyLevel.FULL_AUTONOMY:
-            return True
+        if level == AutonomyLevel.HUMAN_ALL:
+            return False
+
+        if level == AutonomyLevel.HUMAN_POSTS:
+            return False
 
         if level == AutonomyLevel.AUTO_HIGH_SCORE:
-            return score >= self._config.auto_publish_threshold
+            threshold = self._config.get_auto_publish_threshold(content_type)
+            return score >= threshold
+
+        if level == AutonomyLevel.FULL_AUTONOMY:
+            # SAFETY FIX 3.3: Even at full autonomy, enforce minimum quality
+            return score >= self.MIN_SAFE_SCORE
 
         return False
 
@@ -20861,7 +21589,10 @@ class LogLevel(Enum):
 
 
 class LogComponent(Enum):
-    """All system components that can produce logs."""
+    """All system components that can produce logs.
+
+    LOGGING FIX 6.2: Added missing component values.
+    """
     # Core agents
     ORCHESTRATOR = "orchestrator"
     TREND_SCOUT = "trend_scout"
@@ -20872,6 +21603,16 @@ class LogComponent(Enum):
     QC_AGENT = "qc_agent"
     META_AGENT = "meta_agent"
     EVALUATOR = "evaluator"
+
+    # LOGGING FIX 6.2: Added missing components
+    VALIDATOR = "validator"
+    LEARNER = "learner"
+    NANO_BANANA = "nano_banana"
+    PERPLEXITY = "perplexity"
+    HUMAN_APPROVAL = "human_approval"
+    AB_TEST = "ab_test"
+    STARTUP = "startup"
+    CONFIG = "config"
 
     # Infrastructure
     MODIFICATION_SAFETY = "modification_safety"
@@ -20998,6 +21739,9 @@ class AgentLogger:
         # Custom handlers
         self._handlers: List[Callable] = []
 
+        # LOGGING FIX 6.3: Track pending async tasks to prevent garbage collection
+        self._pending_tasks: Set[asyncio.Task] = set()
+
     def set_context(self, run_id: str = None, post_id: str = None):
         """Set context for subsequent logs."""
         if run_id:
@@ -21048,13 +21792,18 @@ class AgentLogger:
         # Write to file
         await self._write_to_file(entry)
 
-        # Write to Supabase (async, don't wait)
+        # LOGGING FIX 6.3: Track tasks to prevent garbage collection
+        # Write to Supabase (async, don't wait but track task)
         if self.supabase and level.value >= self.min_level.value:
-            asyncio.create_task(self._write_to_supabase(entry))
+            task = asyncio.create_task(self._write_to_supabase(entry))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
 
-        # Send to Telegram for important logs
+        # Send to Telegram for important logs (track task)
         if self.telegram and level.value >= self.telegram_min_level.value:
-            asyncio.create_task(self._send_to_telegram(entry))
+            task = asyncio.create_task(self._send_to_telegram(entry))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
 
         # Call custom handlers
         for handler in self._handlers:
@@ -21062,6 +21811,15 @@ class AgentLogger:
                 handler(entry)
             except Exception:
                 pass  # Don't let handler errors break logging
+
+    async def flush(self):
+        """Wait for all pending log tasks to complete.
+
+        LOGGING FIX 6.3: Call this before shutdown to ensure all logs are written.
+        """
+        if self._pending_tasks:
+            await asyncio.gather(*self._pending_tasks, return_exceptions=True)
+            self._pending_tasks.clear()
 
     async def _write_to_file(self, entry: LogEntry):
         """
@@ -21727,7 +22485,10 @@ modification_risk_classification = {
 ```python
 @dataclass
 class ModificationRequest:
-    """Request to modify system behavior."""
+    """Request to modify system behavior.
+
+    SAFETY FIX 3.4: Added timeout and expiration fields.
+    """
     id: str
     modification_type: str
     risk_level: ModificationRiskLevel
@@ -21744,8 +22505,15 @@ class ModificationRequest:
 
     # Approval tracking
     status: str  # "pending", "approved", "rejected", "auto_applied", "rolled_back"
-    human_approver: Optional[str]
-    approved_at: Optional[datetime]
+    human_approver: Optional[str] = None
+    approved_at: Optional[datetime] = None
+
+    # SAFETY FIX 3.4: Audit and timeout fields
+    created_at: datetime = field(default_factory=utc_now)
+    expires_at: Optional[datetime] = None
+    reminder_at: Optional[datetime] = None
+    rejected_reason: Optional[str] = None
+    modification_chain_id: Optional[str] = None
 
 
 @dataclass
@@ -21905,6 +22673,47 @@ class ModificationSafetySystem:
         mod.status = "auto_applied"
         await self.db.save_modification(mod)
 
+    async def _store_pending_modification(self, mod: ModificationRequest):
+        """Store modification with timeout.
+
+        SAFETY FIX 3.4: Set expiration and reminder times.
+        """
+        mod.status = "pending"
+        mod.expires_at = utc_now() + timedelta(hours=24)
+        mod.reminder_at = utc_now() + timedelta(hours=4)
+        await self.db.save_modification(mod)
+
+    async def check_expired_modifications(self):
+        """Auto-reject expired modifications. Call from scheduler.
+
+        SAFETY FIX 3.4: Prevents modifications from hanging indefinitely.
+        """
+        expired = await self.db.get_expired_pending_modifications()
+        for mod in expired:
+            mod.status = "auto_rejected"
+            mod.rejected_reason = "Expired - no response within 24 hours"
+            await self.db.update_modification(mod)
+            await self.telegram.notify(
+                f"⏰ Modification auto-rejected (expired):\n"
+                f"Type: {mod.modification_type}\n"
+                f"Component: {mod.component}"
+            )
+
+    async def send_pending_reminders(self):
+        """Send reminders for pending modifications. Call from scheduler."""
+        pending = await self.db.get_pending_modifications_needing_reminder()
+        for mod in pending:
+            if mod.reminder_at and utc_now() >= mod.reminder_at:
+                await self.telegram.notify(
+                    f"⏳ Reminder: Pending approval for {mod.modification_type}\n"
+                    f"Component: {mod.component}\n"
+                    f"Expires: {mod.expires_at}\n"
+                    f"Reply /approve_{mod.id} or /reject_{mod.id}"
+                )
+                # Update reminder to avoid spam (next reminder in 4 hours)
+                mod.reminder_at = utc_now() + timedelta(hours=4)
+                await self.db.update_modification(mod)
+
     async def _setup_rollback_trigger(
         self,
         mod: ModificationRequest,
@@ -21935,6 +22744,8 @@ class ModificationSafetySystem:
         """
         Get the configuration file path for a component.
 
+        AGENT CONSISTENCY FIX 5.4: Delegates to unified get_config_path function.
+
         Args:
             component: Component name (e.g., "writer", "qc", "humanizer")
 
@@ -21946,23 +22757,14 @@ class ModificationSafetySystem:
         """
         import os
 
-        # Map components to their config files
-        config_mapping = {
-            "writer": "config/writer_config.json",
-            "trend_scout": "config/trend_scout_config.json",
-            "visual_creator": "config/visual_creator_config.json",
-            "scheduler": "config/scheduler_config.json",
-            "qc": "config/qc_config.json",
-            "humanizer": "config/humanizer_config.json",
-            "analyzer": "config/analyzer_config.json",
-        }
-
-        if component not in config_mapping:
-            raise ValidationError(f"Unknown component: {component}")
+        try:
+            relative_path = get_config_path(component)
+        except ValueError as e:
+            raise ValidationError(str(e))
 
         # Get project root from environment or use default
         project_root = os.environ.get("PROJECT_ROOT", os.getcwd())
-        return os.path.join(project_root, config_mapping[component])
+        return os.path.join(project_root, relative_path)
 
     async def _apply_state(self, component: str, state: dict):
         """
@@ -22062,27 +22864,34 @@ class ConfigurationWriteError(Exception):
     pass
 
 
+# AGENT CONSISTENCY FIX 5.4: Single source of truth for config paths
+# Unified mapping replaces two different versions with inconsistent paths
+CONFIG_PATH_MAPPING = {
+    "writer": "config/writer_config.json",
+    "trend_scout": "config/trend_scout_config.json",  # UNIFIED
+    "analyzer": "config/analyzer_config.json",
+    "humanizer": "config/humanizer_config.json",
+    "visual_creator": "config/visual_creator_config.json",  # UNIFIED
+    "qc": "config/qc_config.json",  # UNIFIED
+    "scheduler": "config/scheduler_config.json",
+    "meta_agent": "config/meta_agent_config.json",  # ADDED
+}
+
+
 def get_config_path(component: str) -> str:
     """
-    Get config file path for component.
+    Get config file path for component. Single source of truth.
+
+    AGENT CONSISTENCY FIX 5.4: Unified mapping replaces two different versions.
 
     Uses whitelist-only approach for security (prevents path traversal).
     """
-    paths = {
-        "writer": "config/writer_config.json",
-        "trend_scout": "config/scoring_weights.json",
-        "visual_creator": "config/visual_config.json",
-        "scheduler": "config/schedule.json",
-        "qc": "config/evaluator_config.json",
-        "humanizer": "config/humanizer_config.json",
-        "analyzer": "config/analyzer_config.json",
-    }
-    if component not in paths:
+    if component not in CONFIG_PATH_MAPPING:
         raise ValueError(
             f"Unknown component: {component}. "
-            f"Valid components: {list(paths.keys())}"
+            f"Valid components: {list(CONFIG_PATH_MAPPING.keys())}"
         )
-    return paths[component]
+    return CONFIG_PATH_MAPPING[component]
 ```
 
 ### Integration with Meta-Agent
@@ -22871,6 +23680,9 @@ class AuthorProfileAgent:
         """
         Generate a style guide prompt section for Writer Agent.
         This is injected into the Writer's system prompt.
+
+        AUTHOR PROFILE FIX 9.1: Added missing fields including contrarian_positions,
+        favorite_topics, and best_performing_structures.
         """
 
         return f"""
@@ -22878,31 +23690,42 @@ class AuthorProfileAgent:
 
 You are writing as {profile.author_name}, {profile.author_role}.
 
+EXPERTISE AREAS:
+{', '.join(profile.expertise_areas)}
+
 MATCH THIS VOICE:
 - Use these phrases naturally: {', '.join(profile.characteristic_phrases[:5])}
-- Tone: {profile.formality_level:.0%} formal
+- AVOID these phrases: {', '.join(profile.avoided_phrases[:5])}
+- Sentence style: {profile.sentence_length_preference}
+- Paragraph style: {profile.paragraph_length}
+
+TONE:
+- Formality: {profile.formality_level}/10
 - Humor: {profile.humor_frequency}
 - Emoji usage: {profile.emoji_usage}
-- Typical post length: ~{profile.typical_post_length} characters
 
-THEIR WRITING STYLE:
-- Sentences: {profile.sentence_length_preference}
-- Paragraphs: {profile.paragraph_length}
+KNOWN OPINIONS (use when relevant):
+{chr(10).join(f'- {topic}: {position}' for topic, position in list(profile.known_opinions.items())[:3])}
 
-THEIR EXPERTISE:
-- Topics they know well: {', '.join(profile.expertise_areas[:5])}
-- Their known positions:
-{chr(10).join(f'  - {topic}: {stance}' for topic, stance in list(profile.known_opinions.items())[:3])}
+CONTRARIAN POSITIONS (for engaging content):
+{chr(10).join(f'- {pos}' for pos in profile.contrarian_positions[:3]) if hasattr(profile, 'contrarian_positions') and profile.contrarian_positions else '- None defined'}
 
-AVOID:
-- Never use: {', '.join(profile.avoided_phrases[:5])}
-- Topics to skip: {', '.join(profile.topics_to_avoid[:3])}
+FAVORITE TOPICS (prioritize these):
+{', '.join(profile.favorite_topics[:5]) if hasattr(profile, 'favorite_topics') and profile.favorite_topics else 'Not specified'}
 
-THEIR BEST HOOKS (for inspiration):
+TOPICS TO AVOID:
+{', '.join(profile.topics_to_avoid[:5])}
+
+POST LENGTH: ~{profile.typical_post_length} characters
+
+PROVEN HOOKS (use as inspiration):
 {chr(10).join(f'- "{hook}"' for hook in profile.best_performing_hooks[:3])}
 
-THEIR TYPICAL CTAs:
-{chr(10).join(f'- "{cta}"' for cta in profile.preferred_cta_styles[:3])}
+BEST PERFORMING STRUCTURES:
+{chr(10).join(f'- {struct}' for struct in profile.best_performing_structures[:3]) if hasattr(profile, 'best_performing_structures') and profile.best_performing_structures else '- Standard hook-body-CTA'}
+
+CTA STYLES THAT WORK:
+{', '.join(profile.preferred_cta_styles[:3])}
 
 === END VOICE GUIDE ===
 """
@@ -23033,7 +23856,10 @@ class PostStatus(str, Enum):
 
 @dataclass
 class ScheduledPost:
-    """Post scheduled for future publication."""
+    """Post scheduled for future publication.
+
+    SCHEDULING FIX 10.2: Added error_message, retry_count, and claimed_at fields.
+    """
     id: str
     content: str
     visual_asset_id: str
@@ -23044,14 +23870,19 @@ class ScheduledPost:
     timezone: str
 
     # Status - Now using PostStatus enum
-    status: PostStatus  # Use PostStatus enum instead of string
-    published_at: Optional[datetime]
-    linkedin_post_id: Optional[str]
+    status: PostStatus = PostStatus.SCHEDULED  # Use enum, not string
+    published_at: Optional[datetime] = None
+    linkedin_post_id: Optional[str] = None
+
+    # SCHEDULING FIX 10.2: Missing fields for error handling
+    error_message: Optional[str] = None
+    retry_count: int = 0
+    claimed_at: Optional[datetime] = None
 
     # Metadata
-    created_at: datetime
-    approved_by: str
-    qc_score: float
+    created_at: datetime = field(default_factory=utc_now)
+    approved_by: str = ""
+    qc_score: float = 0.0
 
 
 @dataclass
@@ -23181,7 +24012,7 @@ class SchedulingSystem:
                 content_type=post.content_type,
                 scheduled_time=scheduled_time,
                 timezone=self.timezone,
-                status="scheduled",
+                status=PostStatus.SCHEDULED,  # SCHEDULING FIX 10.1: Use enum
                 published_at=None,
                 linkedin_post_id=None,
                 created_at=datetime.now(timezone.utc),
@@ -23201,7 +24032,7 @@ class SchedulingSystem:
         window_end = time + timedelta(hours=self.MIN_HOURS_BETWEEN_POSTS)
 
         nearby_posts = await self.db.get_scheduled_posts_in_range(
-            window_start, window_end, status="scheduled"
+            window_start, window_end, status=PostStatus.SCHEDULED.value  # SCHEDULING FIX 10.1
         )
 
         if nearby_posts:
@@ -23212,7 +24043,7 @@ class SchedulingSystem:
         day_end = day_start + timedelta(days=1)
 
         daily_posts = await self.db.get_scheduled_posts_in_range(
-            day_start, day_end, status="scheduled"
+            day_start, day_end, status=PostStatus.SCHEDULED.value  # SCHEDULING FIX 10.1
         )
 
         if len(daily_posts) >= self.MAX_POSTS_PER_DAY:
@@ -23271,17 +24102,17 @@ class SchedulingSystem:
 
     async def get_queue(self) -> List[ScheduledPost]:
         """Get all scheduled posts in chronological order."""
-        posts = await self.db.get_scheduled_posts(status="scheduled")
+        posts = await self.db.get_scheduled_posts(status=PostStatus.SCHEDULED.value)  # FIX 10.1
         return sorted(posts, key=lambda p: p.scheduled_time)
 
     async def cancel_post(self, post_id: str) -> None:
         """Cancel a scheduled post."""
         post = await self.db.get_scheduled_post(post_id)
 
-        if post.status != "scheduled":
+        if post.status != PostStatus.SCHEDULED:  # SCHEDULING FIX 10.1: Use enum
             raise ValueError(f"Cannot cancel post with status '{post.status}'")
 
-        post.status = "cancelled"
+        post.status = PostStatus.CANCELLED  # SCHEDULING FIX 10.1: Use enum
         await self.db.update_scheduled_post(post)
 
     async def reschedule_post(
@@ -23289,15 +24120,25 @@ class SchedulingSystem:
         post_id: str,
         new_time: datetime
     ) -> ScheduledPost:
-        """Reschedule a post to new time."""
+        """Reschedule a post to new time.
 
-        if not await self._is_slot_available(new_time):
-            raise SchedulingConflictError(f"Time {new_time} not available")
+        SCHEDULING FIX 10.4: Added advisory lock and timezone validation.
+        """
 
-        post = await self.db.get_scheduled_post(post_id)
+        # SCHEDULING FIX 10.4: Validate timezone
+        if new_time.tzinfo is None:
+            raise ValueError("new_time must be timezone-aware")
+        new_time = ensure_utc(new_time)
 
-        if post.status != "scheduled":
-            raise ValueError(f"Cannot reschedule post with status '{post.status}'")
+        # SCHEDULING FIX 10.4: Use advisory lock like schedule_post
+        async with self.db.advisory_lock(f"schedule_slot_{new_time.isoformat()}"):
+            if not await self._is_slot_available(new_time):
+                raise SchedulingConflictError(f"Time {new_time} not available")
+
+            post = await self.db.get_scheduled_post(post_id)
+
+            if post.status != PostStatus.SCHEDULED:  # SCHEDULING FIX 10.1: Use enum
+                raise ValueError(f"Cannot reschedule post with status '{post.status}'")
 
         post.scheduled_time = new_time
         await self.db.update_scheduled_post(post)
@@ -23312,7 +24153,7 @@ class SchedulingSystem:
         week_end = now + timedelta(days=7)
 
         posts = await self.db.get_scheduled_posts_in_range(
-            now, week_end, status="scheduled"
+            now, week_end, status=PostStatus.SCHEDULED.value  # SCHEDULING FIX 10.1
         )
 
         by_day = {}
@@ -23379,11 +24220,12 @@ class PublishingScheduler:
 
         # Atomic claim - only process posts we successfully claim
         # This changes status from "scheduled" to "publishing" atomically
+        # SCHEDULING FIX 10.1: Use PostStatus enum
         claimed_posts = await self.scheduling.db.claim_due_posts(
             before_time=now + timedelta(minutes=1),
             after_time=now - timedelta(minutes=1),
-            from_status="scheduled",
-            to_status="publishing",
+            from_status=PostStatus.SCHEDULED.value,
+            to_status=PostStatus.PUBLISHING.value,
             limit=10
         )
 
@@ -23391,7 +24233,7 @@ class PublishingScheduler:
             try:
                 await self._publish_post(post)
             except Exception as e:
-                post.status = "failed"
+                post.status = PostStatus.FAILED  # SCHEDULING FIX 10.1
                 post.error_message = str(e)
                 await self.scheduling.db.update_scheduled_post(post)
                 await self.telegram.notify(
@@ -23411,8 +24253,8 @@ class PublishingScheduler:
                 media_urls=[visual.url] if visual else None
             )
 
-            # Update status
-            post.status = "published"
+            # Update status - SCHEDULING FIX 10.1: Use PostStatus enum
+            post.status = PostStatus.PUBLISHED
             post.published_at = datetime.now(timezone.utc)
             post.linkedin_post_id = linkedin_post_id
             await self.scheduling.db.update_scheduled_post(post)
@@ -23425,11 +24267,44 @@ class PublishingScheduler:
 
         except Exception as e:
             # Re-raise to let _check_and_publish handle it
+            # CODE QUALITY FIX 11.1: Removed dead code after raise
+            # The notification is now handled in _check_and_publish
             raise
 
-            await self.telegram.notify(
-                f"❌ Failed to publish post {post.id}:\n{str(e)}"
-            )
+    # SCHEDULING FIX 10.3: Constants for stuck post recovery
+    STUCK_TIMEOUT_MINUTES = 10
+    MAX_RETRIES = 3
+
+    async def recover_stuck_posts(self):
+        """Recover posts stuck in 'publishing' status.
+
+        SCHEDULING FIX 10.3: Posts can get stuck if the publishing process
+        crashes or times out. This method recovers them.
+        """
+        import logging
+        logger = logging.getLogger("AutoPublisher")
+
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=self.STUCK_TIMEOUT_MINUTES)
+
+        stuck_posts = await self.scheduling.db.get_posts_by_status_and_claimed_before(
+            status=PostStatus.PUBLISHING.value,
+            claimed_before=cutoff
+        )
+
+        for post in stuck_posts:
+            if post.retry_count < self.MAX_RETRIES:
+                # Reset for retry
+                post.status = PostStatus.SCHEDULED
+                post.retry_count += 1
+                post.claimed_at = None
+                logger.warning(f"Recovering stuck post {post.id}, retry {post.retry_count}")
+            else:
+                # Max retries exceeded
+                post.status = PostStatus.FAILED
+                post.error_message = f"Max retries ({self.MAX_RETRIES}) exceeded"
+                logger.error(f"Post {post.id} failed after {self.MAX_RETRIES} retries")
+
+            await self.scheduling.db.update_scheduled_post(post)
 
     def stop(self):
         """Stop the scheduler."""
