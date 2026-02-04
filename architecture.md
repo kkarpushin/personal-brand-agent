@@ -154,7 +154,7 @@ class LoggerFactory:
     """
 
     _configured = False
-    _lock = threading.Lock()  # FIX: Thread-safe configuration
+    _lock = threading.Lock()
 
     @classmethod
     def configure(
@@ -171,7 +171,6 @@ class LoggerFactory:
             format_string: Custom format string
             log_file: Optional file path for file logging
         """
-        # FIX: Use lock to prevent duplicate handler registration in multi-threaded startup
         with cls._lock:
             if cls._configured:
                 return
@@ -262,6 +261,21 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def generate_id() -> str:
+    """
+    Generate a unique ID for database records.
+
+    Uses UUID4 which is suitable for:
+    - Database primary keys
+    - Unique identifiers for modifications, scheduled posts, etc.
+
+    Returns:
+        A unique UUID string (compatible with Supabase UUID type)
+    """
+    import uuid
+    return str(uuid.uuid4())
+
+
 def ensure_utc(dt: datetime) -> datetime:
     """
     Ensure a datetime is timezone-aware in UTC.
@@ -333,7 +347,6 @@ class SupabaseDB:
             raise ValidationError("post must have content_type")
 
         result = await self.client.table("posts").insert(post).execute()
-        # FIX: Validate response to prevent cryptic IndexError
         if not result.data:
             raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
@@ -384,7 +397,6 @@ class SupabaseDB:
 
     async def store_metrics_snapshot(self, snapshot: Dict[str, Any]) -> str:
         """Store a metrics snapshot for a post."""
-        # FIX-023: Input validation
         if not snapshot:
             raise ValidationError("snapshot cannot be None or empty")
         if "post_id" not in snapshot:
@@ -392,7 +404,6 @@ class SupabaseDB:
 
         result = await self.client.table("post_metrics").insert(snapshot).execute()
 
-        # FIX-023b: Response validation
         if not result.data:
             raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
@@ -456,9 +467,7 @@ class SupabaseDB:
         """
         Get active learnings with pagination.
 
-        FIX: Added pagination to prevent memory overflow with large datasets.
-        Default limit of 1000 is reasonable for most use cases.
-        """
+"""
         result = await (
             self.client.table("learnings")
             .select("*")
@@ -470,12 +479,7 @@ class SupabaseDB:
         return result.data
 
     async def update_learnings(self, learnings: List[Dict[str, Any]]) -> None:
-        """
-        Update existing learnings (confirmations, contradictions).
-
-        FIX: Uses batch upsert instead of N individual UPDATE queries.
-        This reduces database round-trips from O(n) to O(1).
-        """
+        """Update existing learnings (confirmations, contradictions)."""
         if not learnings:
             return
 
@@ -512,10 +516,9 @@ class SupabaseDB:
 
     async def save_modification(self, modification: Dict[str, Any]) -> str:
         """Save a code modification record."""
-        # FIX-023: Input validation
         if not modification:
             raise ValidationError("modification cannot be None or empty")
-        required_fields = {"component", "modification_type", "before_state", "after_state"}
+        required_fields = {"gap_type", "gap_description", "module_name", "file_path", "code_content"}
         missing = required_fields - set(modification.keys())
         if missing:
             raise ValidationError(f"modification missing required fields: {missing}")
@@ -538,7 +541,6 @@ class SupabaseDB:
 
     async def update_modification(self, modification: Dict[str, Any]) -> None:
         """Update modification status."""
-        # FIX-023: Input validation - must have 'id' for update
         if not modification:
             raise ValidationError("modification cannot be None or empty")
         if "id" not in modification:
@@ -564,10 +566,9 @@ class SupabaseDB:
 
     async def save_experiment(self, experiment: Dict[str, Any]) -> str:
         """Save an experiment."""
-        # FIX-023: Input validation
         if not experiment:
             raise ValidationError("experiment cannot be None or empty")
-        required_fields = {"name", "hypothesis", "variants"}
+        required_fields = {"name", "hypothesis", "variable", "control_value", "treatment_value"}
         missing = required_fields - set(experiment.keys())
         if missing:
             raise ValidationError(f"experiment missing required fields: {missing}")
@@ -590,7 +591,6 @@ class SupabaseDB:
 
     async def update_experiment(self, experiment: Dict[str, Any]) -> None:
         """Update experiment."""
-        # FIX-023: Input validation - must have 'id' for update
         if not experiment:
             raise ValidationError("experiment cannot be None or empty")
         if "id" not in experiment:
@@ -614,10 +614,9 @@ class SupabaseDB:
 
     async def save_research_report(self, report: Dict[str, Any]) -> str:
         """Save a research report."""
-        # FIX-023: Input validation
         if not report:
             raise ValidationError("report cannot be None or empty")
-        required_fields = {"trigger", "findings"}
+        required_fields = {"trigger_type", "findings", "recommendations"}
         missing = required_fields - set(report.keys())
         if missing:
             raise ValidationError(f"report missing required fields: {missing}")
@@ -745,10 +744,9 @@ class SupabaseDB:
 
     async def save_photo_metadata(self, metadata: Dict[str, Any]) -> str:
         """Save new photo metadata."""
-        # FIX-023: Input validation
         if not metadata:
             raise ValidationError("metadata cannot be None or empty")
-        required_fields = {"filename", "storage_path"}
+        required_fields = {"file_name", "file_path"}
         missing = required_fields - set(metadata.keys())
         if missing:
             raise ValidationError(f"metadata missing required fields: {missing}")
@@ -765,11 +763,12 @@ class SupabaseDB:
 
     async def save_draft(self, draft: Dict[str, Any]) -> str:
         """Save a draft post."""
-        # FIX-023: Input validation
         if not draft:
             raise ValidationError("draft cannot be None or empty")
-        if "content" not in draft:
-            raise ValidationError("draft must have 'content'")
+        required_fields = {"hook", "body", "full_text", "content_type"}
+        missing = required_fields - set(draft.keys())
+        if missing:
+            raise ValidationError(f"draft missing required fields: {missing}")
 
         result = await self.client.table("drafts").insert(draft).execute()
 
@@ -789,7 +788,6 @@ class SupabaseDB:
 
     async def update_draft(self, draft: Dict[str, Any]) -> None:
         """Update a draft."""
-        # FIX-023: Input validation - must have 'id' for update
         if not draft:
             raise ValidationError("draft cannot be None or empty")
         if "id" not in draft:
@@ -805,22 +803,26 @@ class SupabaseDB:
 
 # Singleton pattern - one async connection for entire application
 _db_instance: Optional[SupabaseDB] = None
-_db_lock: Optional[asyncio.Lock] = None  # FIX-013: Lazy initialization to avoid event loop binding issues
+_db_lock: Optional[asyncio.Lock] = None
+
+import threading
+_init_lock = threading.Lock()
+
 
 async def get_db() -> SupabaseDB:
-    """
-    Get the global async database instance (thread-safe, async-safe).
-    FIX-013: Lock is created lazily to avoid event loop binding issues.
-    """
+    """Get the global async database instance (thread-safe, async-safe)."""
     global _db_instance, _db_lock
 
-    # Lazy lock creation in current event loop
+    # Thread-safe lazy initialization of async lock
     if _db_lock is None:
-        _db_lock = asyncio.Lock()
+        with _init_lock:
+            # Double-check after acquiring thread lock
+            if _db_lock is None:
+                _db_lock = asyncio.Lock()
 
     if _db_instance is None:
         async with _db_lock:
-            # Double-check after acquiring lock
+            # Double-check after acquiring async lock
             if _db_instance is None:
                 _db_instance = await SupabaseDB.create()
     return _db_instance
@@ -883,7 +885,6 @@ CREATE TABLE posts (
 CREATE INDEX idx_posts_content_type ON posts(content_type);
 CREATE INDEX idx_posts_created_at ON posts(created_at DESC);
 CREATE INDEX idx_posts_qc_score ON posts(qc_score DESC);
--- FIX: Missing indexes identified by architecture review
 CREATE INDEX idx_posts_topic_id ON posts(topic_id);
 CREATE INDEX idx_posts_published_at ON posts(published_at DESC) WHERE published_at IS NOT NULL;
 
@@ -947,7 +948,6 @@ CREATE TABLE learnings (
 CREATE INDEX idx_learnings_component ON learnings(affected_component);
 CREATE INDEX idx_learnings_confidence ON learnings(confidence DESC);
 CREATE INDEX idx_learnings_active ON learnings(is_active) WHERE is_active = TRUE;
--- FIX: Missing indexes for content_type filtering (used in get_learnings_for_component)
 CREATE INDEX idx_learnings_content_type ON learnings(content_type);
 CREATE INDEX idx_learnings_component_type ON learnings(affected_component, content_type);
 
@@ -1084,7 +1084,6 @@ CREATE INDEX idx_prompts_active ON prompts(component, is_active) WHERE is_active
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- AUTHOR_PHOTOS: Author photo library for post personalization
--- FIX: Previously referenced but not defined
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE author_photos (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1153,12 +1152,10 @@ CREATE TABLE topic_cache (
 
 CREATE INDEX idx_topic_cache_score ON topic_cache(score DESC);
 CREATE INDEX idx_topic_cache_cached ON topic_cache(cached_at DESC);
--- FIX: Index for cleanup queries on expired topics
 CREATE INDEX idx_topic_cache_expires ON topic_cache(expires_at) WHERE expires_at IS NOT NULL;
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- DRAFTS: Work in progress posts
--- FIX: Expanded to match DraftPost dataclass structure
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE drafts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1167,28 +1164,28 @@ CREATE TABLE drafts (
     topic_id TEXT,
     content_type TEXT NOT NULL,
 
-    -- Structured content (FIX: separate fields instead of single text_content)
+    -- Structured content
     hook TEXT NOT NULL,                     -- First line (must fit in 210 chars)
     body TEXT NOT NULL,                     -- Main content
     cta TEXT,                               -- Call to action
     hashtags TEXT[] DEFAULT '{}',           -- Array of hashtags
     full_text TEXT NOT NULL,                -- Combined, formatted
 
-    -- Template metadata (FIX: added fields)
+    -- Template metadata
     template_used TEXT,
     template_category TEXT,                 -- universal / enterprise / research / automation / etc.
     hook_style TEXT,                        -- metrics / lessons / contrarian / how_to / etc.
 
-    -- Content metrics (FIX: added fields)
+    -- Content metrics
     character_count INTEGER,
     estimated_read_time TEXT,
     hook_in_limit BOOLEAN DEFAULT TRUE,     -- Is hook under 210 chars?
     length_in_range BOOLEAN DEFAULT TRUE,   -- Is total length in target range?
 
-    -- Type-specific data (FIX: structured JSONB)
+    -- Type-specific data
     type_data_injected JSONB DEFAULT '{}',  -- What extraction data was used
 
-    -- Visual brief for next agents (FIX: added fields)
+    -- Visual brief for next agents
     visual_brief TEXT,                      -- Description for image generation
     visual_type TEXT,                       -- data_viz / diagram / screenshot / quote_card
     visual_data JSONB,                      -- Generated visual data
@@ -1222,7 +1219,6 @@ CREATE INDEX idx_drafts_content_type ON drafts(content_type);
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- PHOTO_METADATA: Personal photo library for post visuals
--- FIX: New table to match PhotoMetadata dataclass
 -- ───────────────────────────────────────────────────────────────────────────
 CREATE TABLE photo_metadata (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1458,7 +1454,6 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Increment photo usage counter
--- FIX: Previously called by SupabaseDB.update_photo_usage but not defined
 CREATE OR REPLACE FUNCTION increment_photo_usage(
     p_photo_id UUID,
     p_post_id UUID
@@ -1506,7 +1501,7 @@ import subprocess
 import json
 import tempfile
 import os
-import threading  # FIX-001: Required for _claude_cli_lock
+import threading
 from pathlib import Path
 from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass
@@ -1582,11 +1577,6 @@ class ClaudeCodeCLI:
         Returns:
             ClaudeResponse with the generated content
         """
-        # Build command
-        # FIX: Use correct Claude Code CLI flags
-        # Previous code used non-existent flags: --print, --system, --file, --prompt
-        # Correct flags: -p for prompt, --output-format for output type
-
         # Build the full prompt (including system prompt and file contents)
         full_prompt = ""
 
@@ -1646,7 +1636,6 @@ class ClaudeCodeCLI:
                 )
 
         except asyncio.TimeoutError:
-            # FIX: Kill orphan process to prevent resource leak
             try:
                 process.kill()
                 await process.wait()  # Clean up zombie process
@@ -1658,7 +1647,6 @@ class ClaudeCodeCLI:
                 error=f"Timeout after {self.timeout} seconds (process killed)"
             )
         except Exception as e:
-            # FIX: Also cleanup subprocess on general Exception
             try:
                 if process and process.returncode is None:
                     process.kill()
@@ -1702,14 +1690,12 @@ Just the raw JSON object/array.
             raise RuntimeError(f"Claude CLI error: {response.error}")
 
         # Parse JSON from response
-        import re  # FIX: Move import to top of function, not inside except
+        import re
 
         try:
             # Try to extract JSON from response (handle markdown code blocks)
             content = response.content.strip()
 
-            # FIX: Improved markdown code block removal
-            # Handle ```json, ```python, etc. and verify closing ```
             if content.startswith("```"):
                 lines = content.split("\n")
                 # Check if last line is closing ```
@@ -1725,13 +1711,12 @@ Just the raw JSON object/array.
 
         except json.JSONDecodeError as e:
             # Try to find JSON object or array in the response
-            # FIX: Use non-greedy regex to avoid over-matching
             json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}|\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]', response.content)
             if json_match:
                 try:
                     return json.loads(json_match.group())
                 except json.JSONDecodeError:
-                    pass  # FIX: Specify exception type instead of bare except
+                    pass
 
             raise ValueError(f"Failed to parse JSON from response: {e}\nContent: {response.content[:500]}")
 
@@ -1867,7 +1852,6 @@ Return JSON with:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GLOBAL CLAUDE CLI INSTANCE
-# FIX: Added thread-safe initialization (consistent with get_db() pattern)
 # ═══════════════════════════════════════════════════════════════════════════
 
 _claude_cli_instance: Optional[ClaudeCodeCLI] = None
@@ -1933,7 +1917,6 @@ class ContentType(Enum):
 
 # ═══════════════════════════════════════════════════════════════════════════
 # BRANDED TYPES FOR SCORE SCALES
-# FIX: Prevents confusion between 0-100 scale and 0-1 scale (confidence)
 # ═══════════════════════════════════════════════════════════════════════════
 from typing import NewType, Union
 
@@ -2094,13 +2077,7 @@ class ThresholdConfig:
         ContentType.TOOL_RELEASE: 0.875,        # 8.0 * 0.875 = 7.0 effective
     })
 
-    # ─────────────────────────────────────────────────────────────────
-    # FIX: CENTRALIZED MAX REVISIONS BY CONTENT TYPE
-    # Previously hardcoded in route_after_qc, now centralized here.
-    # Rationale:
-    # - PRIMARY_SOURCE: Research posts need more refinement for accuracy
-    # - COMMUNITY_CONTENT: Authenticity suffers from over-editing
-    # ─────────────────────────────────────────────────────────────────
+    # Max revisions by content type
     max_revisions_by_type: Dict[ContentType, int] = field(default_factory=lambda: {
         ContentType.ENTERPRISE_CASE: 3,
         ContentType.PRIMARY_SOURCE: 4,      # Research needs more refinement
@@ -2110,10 +2087,10 @@ class ThresholdConfig:
     })
 
     # Meta-agent iteration limits
-    max_meta_iterations: int = 3  # FIX: Was hardcoded as magic number
+    max_meta_iterations: int = 3
 
-    # FIX: Centralize max_reject_restarts (was hardcoded in route_after_qc)
-    max_reject_restarts: int = 2  # Maximum topic restarts before manual escalation
+    # Maximum topic restarts before manual escalation
+    max_reject_restarts: int = 2
 
     def get_pass_threshold(self, content_type: ContentType) -> float:
         """Get effective pass threshold for content type."""
@@ -2153,17 +2130,11 @@ class ThresholdConfig:
             return "reject"
 
     def get_max_revisions(self, content_type: ContentType) -> int:
-        """
-        FIX: Get max revisions for content type from centralized config.
-        Previously hardcoded in route_after_qc.
-        """
+        """Get max revisions for content type from centralized config."""
         return self.max_revisions_by_type.get(content_type, 3)
 
     def get_max_meta_iterations(self) -> int:
-        """
-        FIX: Get max meta-agent iterations.
-        Previously hardcoded as magic number 3 in meta_evaluate_node.
-        """
+        """Get max meta-agent iterations."""
         return self.max_meta_iterations
 
 
@@ -2175,7 +2146,7 @@ THRESHOLD_CONFIG = ThresholdConfig()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MEDIUM PRIORITY FIX #1: RETRY DECORATOR
+# RETRY DECORATOR
 # Reusable retry logic for external API calls (LLM, LinkedIn, Perplexity)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2280,7 +2251,6 @@ def validate_list_not_empty(value: list, name: str) -> None:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # CIRCUIT BREAKER PATTERN
-# FIX: Prevents cascade failures when external services are unavailable
 # ═══════════════════════════════════════════════════════════════════════════
 
 from enum import Enum
@@ -2398,7 +2368,7 @@ class CircuitBreaker:
             if self.state == CircuitState.HALF_OPEN:
                 self.logger.warning(f"Circuit {self.service_name}: HALF_OPEN -> OPEN (failure during recovery)")
                 self.state = CircuitState.OPEN
-                self.success_count = 0  # FIX: Reset success_count to prevent stale state
+                self.success_count = 0
 
             elif self.state == CircuitState.CLOSED:
                 if self.failure_count >= self.config.failure_threshold:
@@ -2407,7 +2377,7 @@ class CircuitBreaker:
                         f"(threshold {self.config.failure_threshold} reached)"
                     )
                     self.state = CircuitState.OPEN
-                    self.success_count = 0  # FIX: Reset success_count on circuit open
+                    self.success_count = 0
 
     def __call__(self, func):
         """Decorator usage."""
@@ -2569,7 +2539,7 @@ def with_retry(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MEDIUM PRIORITY FIX #3: SOURCE THRESHOLD CONFIGURATION
+# SOURCE THRESHOLD CONFIGURATION
 # Centralized thresholds for content sources (HN, ProductHunt, GitHub, etc.)
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2598,10 +2568,10 @@ class SourceThresholdConfig:
     product_hunt_min_upvotes: int = 200
     github_min_stars_velocity: int = 100  # Stars gained in last 24h
     reddit_min_score: int = 100
-    reddit_min_comments: int = 20         # FIX: Added (was hardcoded in sources_config)
+    reddit_min_comments: int = 20
     youtube_min_views: int = 10000
-    devto_min_reactions: int = 50         # FIX: Added (was hardcoded in sources_config)
-    medium_min_claps: int = 100           # FIX: Added for completeness
+    devto_min_reactions: int = 50
+    medium_min_claps: int = 100
 
     # ─────────────────────────────────────────────────────────────────
     # RESEARCH SOURCE THRESHOLDS
@@ -2623,7 +2593,6 @@ class SourceThresholdConfig:
             self.product_hunt_min_upvotes = int(os.environ['PH_MIN_UPVOTES'])
         if os.environ.get('GH_MIN_STARS_VELOCITY'):
             self.github_min_stars_velocity = int(os.environ['GH_MIN_STARS_VELOCITY'])
-        # FIX: Added environment overrides for new thresholds
         if os.environ.get('REDDIT_MIN_COMMENTS'):
             self.reddit_min_comments = int(os.environ['REDDIT_MIN_COMMENTS'])
         if os.environ.get('DEVTO_MIN_REACTIONS'):
@@ -2653,7 +2622,7 @@ SOURCE_THRESHOLD_CONFIG = SourceThresholdConfig()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# MEDIUM PRIORITY FIX #10: LINKEDIN PLATFORM LIMITS
+# LINKEDIN PLATFORM LIMITS
 # Centralized configuration for LinkedIn platform constraints
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -2730,28 +2699,25 @@ LINKEDIN_LIMITS = LinkedInLimitsConfig()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# LOW PRIORITY FIX #2, #3, #8: NAMED CONSTANTS
+# NAMED CONSTANTS
 # Replace magic numbers and hardcoded strings with named constants
 # ═══════════════════════════════════════════════════════════════════════════
 
 class ScoringConstants:
     """Named constants for scoring and evaluation thresholds."""
 
-    # LOW PRIORITY FIX #2: Magic numbers for scoring
     LOW_SCORE_THRESHOLD: int = 7          # Below this is considered a low score
     TARGET_SCORE: int = 8                 # Target score for revisions
     EXCELLENT_SCORE: int = 9              # Excellent quality threshold
 
-    # LOW PRIORITY FIX #3: Summary/text truncation limits
+    # Summary/text truncation limits
     CLASSIFICATION_SUMMARY_MAX_CHARS: int = 500
     HOOK_PREVIEW_MAX_CHARS: int = 100
     ERROR_CONTEXT_MAX_CHARS: int = 200
 
 
 class HistoryLimits:
-    """
-    LOW PRIORITY FIX #11: Limits for history/log collections to prevent memory leaks.
-    """
+    """Limits for history/log collections to prevent memory leaks."""
     MAX_CRITIQUE_HISTORY: int = 100       # Max meta-critique entries to keep
     MAX_REVISION_HISTORY: int = 50        # Max revision entries per post
     MAX_RESEARCH_HISTORY: int = 30        # Max research reports to keep
@@ -2760,7 +2726,7 @@ class HistoryLimits:
 
 class ErrorMessages:
     """
-    LOW PRIORITY FIX #8: Centralized error messages.
+    Centralized error messages.
     Use these instead of hardcoded strings throughout the codebase.
     """
     # Trend Scout errors
@@ -3048,10 +3014,6 @@ domain_to_candidate_types = {
     "medium.com": [ContentType.AUTOMATION_CASE, ContentType.ENTERPRISE_CASE, ContentType.PRIMARY_SOURCE],
     "dev.to": [ContentType.AUTOMATION_CASE, ContentType.COMMUNITY_CONTENT],
 
-    # ═══════════════════════════════════════════════════════════════
-    # FIX: Added missing domains from sources_config
-    # ═══════════════════════════════════════════════════════════════
-
     # Substack (general + specific high-value newsletters)
     "substack.com": [ContentType.PRIMARY_SOURCE, ContentType.COMMUNITY_CONTENT],
     "simonwillison.substack.com": [ContentType.PRIMARY_SOURCE],
@@ -3140,8 +3102,7 @@ def classify_content(
 ) -> ContentType:
     """
     Two-level classification: domain hint + LLM refinement.
-
-    MEDIUM PRIORITY FIX #1: Added retry logic and logging.
+    Includes retry logic and logging for reliability.
     """
     from urllib.parse import urlparse
     import logging
@@ -3181,7 +3142,6 @@ def classify_content(
         summary=summary[:500]  # Limit summary length
     )
 
-    # FIX: Use retry for LLM call with proper error handling
     try:
         response = _classify_with_retry(llm_client, prompt)
         classified = response.strip().upper()
@@ -3236,7 +3196,7 @@ def _matches_pattern(url: str, pattern: str) -> bool:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LEGACY: Simple domain-only classification
-# LOW PRIORITY FIX #5: Added proper deprecation warning
+# Added proper deprecation warning
 # ═══════════════════════════════════════════════════════════════════════════
 import warnings
 
@@ -3359,15 +3319,10 @@ sources_config = {
     # TIER 2: NEWS & SOCIAL (Trending, time-sensitive content)
     # ═══════════════════════════════════════════════════════════════
 
-    # ═══════════════════════════════════════════════════════════════════
-    # FIX #3: Thresholds now use SOURCE_THRESHOLD_CONFIG
-    # This enables runtime tuning via environment variables
-    # ═══════════════════════════════════════════════════════════════════
-
     "hackernews": {
         "endpoint": "https://hacker-news.firebaseio.com/v0/",
         "filter_keywords": ["AI", "LLM", "GPT", "machine learning", "AGI", "Claude", "agent"],
-        "min_score": SOURCE_THRESHOLD_CONFIG.hackernews_min_score,  # FIX: Centralized
+        "min_score": SOURCE_THRESHOLD_CONFIG.hackernews_min_score,
         "frequency": "every_4_hours",
         "priority": "P0",
         "content_type": ContentType.COMMUNITY_CONTENT,
@@ -3384,7 +3339,7 @@ sources_config = {
             "@emaborratov", "@oaborratov"
         ],
         "hashtags": ["#AI", "#MachineLearning", "#LLM", "#GenerativeAI", "#AIAgents"],
-        "min_engagement": SOURCE_THRESHOLD_CONFIG.twitter_min_engagement,  # FIX: Centralized
+        "min_engagement": SOURCE_THRESHOLD_CONFIG.twitter_min_engagement,
         "frequency": "continuous",
         "priority": "P1",
         "content_type": ContentType.COMMUNITY_CONTENT
@@ -3393,7 +3348,7 @@ sources_config = {
     "product_hunt": {
         "endpoint": "https://api.producthunt.com/v2/api/graphql",
         "category": "artificial-intelligence",
-        "min_upvotes": SOURCE_THRESHOLD_CONFIG.product_hunt_min_upvotes,  # FIX: Centralized
+        "min_upvotes": SOURCE_THRESHOLD_CONFIG.product_hunt_min_upvotes,
         "frequency": "daily",
         "priority": "P1",
         "content_type": ContentType.TOOL_RELEASE,
@@ -3414,7 +3369,7 @@ sources_config = {
         "frequency": "daily",
         "priority": "P1",
         "content_type": ContentType.TOOL_RELEASE,
-        "min_stars_velocity": SOURCE_THRESHOLD_CONFIG.github_min_stars_velocity  # FIX: Centralized
+        "min_stars_velocity": SOURCE_THRESHOLD_CONFIG.github_min_stars_velocity
     },
 
     "perplexity": {
@@ -3486,8 +3441,8 @@ sources_config = {
             "r/automation"
         ],
         "method": "PRAW (Reddit API)",
-        "min_upvotes": SOURCE_THRESHOLD_CONFIG.reddit_min_score,      # FIX: Centralized
-        "min_comments": SOURCE_THRESHOLD_CONFIG.reddit_min_comments,  # FIX: Centralized
+        "min_upvotes": SOURCE_THRESHOLD_CONFIG.reddit_min_score,
+        "min_comments": SOURCE_THRESHOLD_CONFIG.reddit_min_comments,
         "frequency": "every_4_hours",
         "priority": "P0",
         "content_type": ContentType.COMMUNITY_CONTENT,
@@ -3521,7 +3476,7 @@ sources_config = {
             "publish_date": True,
             "duration": True
         },
-        "min_views": SOURCE_THRESHOLD_CONFIG.youtube_min_views  # FIX: Centralized
+        "min_views": SOURCE_THRESHOLD_CONFIG.youtube_min_views
     },
 
     "medium": {
@@ -3554,7 +3509,7 @@ sources_config = {
     "devto": {
         "endpoint": "https://dev.to/api/articles",
         "tags": ["ai", "machinelearning", "llm", "automation", "langchain"],
-        "min_reactions": SOURCE_THRESHOLD_CONFIG.devto_min_reactions,  # FIX: Centralized
+        "min_reactions": SOURCE_THRESHOLD_CONFIG.devto_min_reactions,
         "frequency": "daily",
         "priority": "P2",
         "content_type": ContentType.AUTOMATION_CASE
@@ -3686,8 +3641,6 @@ exclusion_rules = {
     "low_credibility_sources": {
         "description": "Источники с низкой достоверностью",
         "blocked_domains": LOW_CREDIBILITY_DOMAINS,  # Use module-level constant
-        # FIX: Reference the module-level constant to avoid duplication
-        # Previously had inline list duplicated - now uses LOW_CREDIBILITY_DOMAINS frozenset
         "condition": lambda topic: topic.source_domain in LOW_CREDIBILITY_DOMAINS
     }
 }
@@ -3699,7 +3652,7 @@ def pre_filter_topics(
     """
     Apply exclusion rules BEFORE scoring.
 
-    MEDIUM PRIORITY FIX #12: Added type hints, error handling, and logging.
+    Added type hints, error handling, and logging.
 
     Args:
         raw_topics: List of raw topic dictionaries from sources
@@ -3724,7 +3677,6 @@ def pre_filter_topics(
         exclusion_reasons: List[str] = []
 
         for rule_name, rule in exclusion_rules.items():
-            # FIX #12: Wrap rule evaluation in try/except
             try:
                 if evaluate_rule(topic, rule):
                     exclusion_reasons.append(rule_name)
@@ -3750,7 +3702,6 @@ def pre_filter_topics(
         else:
             passed.append(topic)
 
-    # FIX #12: Log summary
     logger.info(
         f"[PRE_FILTER] Complete: {len(passed)} passed, {len(excluded_log)} excluded\n"
         f"  Exclusion breakdown: {_summarize_exclusions(excluded_log)}"
@@ -3769,15 +3720,12 @@ def _summarize_exclusions(excluded_log: List[dict]) -> Dict[str, int]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# HELPER FUNCTIONS (FIX: Previously undefined, now implemented)
+# HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def evaluate_rule(topic: Any, rule: dict) -> bool:
     """
     Evaluate an exclusion rule against a topic.
-
-    FIX: Previously called but never defined, causing NameError.
-    FIX: Now respects apply_to and exclude_for content type restrictions.
 
     Args:
         topic: Topic object or dict to evaluate
@@ -3787,21 +3735,18 @@ def evaluate_rule(topic: Any, rule: dict) -> bool:
     Returns:
         True if topic should be excluded (rule matches), False otherwise
     """
-    # ═══════════════════════════════════════════════════════════════
-    # FIX: Check content type restrictions FIRST
-    # ═══════════════════════════════════════════════════════════════
     topic_type = getattr(topic, 'content_type', None)
 
     # Check apply_to restriction (rule only applies to listed types)
     apply_to = rule.get("apply_to")
     if apply_to and topic_type not in apply_to:
-        return False  # Rule doesn't apply to this content type
+        return False
 
     # Check exclude_for restriction (rule applies to all EXCEPT listed types)
     exclude_for = rule.get("exclude_for")
     if exclude_for and exclude_for != ["all"]:
         if topic_type in exclude_for:
-            return False  # Rule excludes this content type
+            return False
 
     # Check if rule has explicit condition
     condition = rule.get("condition")
@@ -3834,8 +3779,6 @@ def _check_signal(topic: Any, signal: str) -> bool:
 def weighted_average(score_config: dict, topic: Any) -> float:
     """
     Calculate weighted average score for a topic.
-
-    FIX: Previously called but never defined, causing NameError.
 
     Args:
         score_config: Dict of factor_name -> {weight, factors}
@@ -3886,8 +3829,6 @@ def _calculate_factor_score(topic: Any, factors: List[str]) -> float:
 def llm_extract(prompt: str) -> List[str]:
     """
     Extract structured data using LLM.
-
-    FIX: Previously called but never defined. Uses Claude Code CLI.
 
     Args:
         prompt: Extraction prompt with instructions
@@ -4214,14 +4155,12 @@ content_quality_signals = {
 
 ```python
 # ═══════════════════════════════════════════════════════════════════════════
-# TOP PICK HELPER FUNCTIONS (FIX: Previously undefined, now implemented)
+# TOP PICK HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
 def calculate_top_pick_bonus(topic: Any, criteria: dict) -> float:
     """
     Calculate bonus score for top pick selection.
-
-    FIX: Previously called but never defined, causing NameError.
 
     Args:
         topic: Topic object with scoring attributes
@@ -4236,8 +4175,6 @@ def calculate_top_pick_bonus(topic: Any, criteria: dict) -> float:
 def generate_selection_rationale(topic: Any) -> str:
     """
     Generate explanation of why this topic was selected as top pick.
-
-    FIX: Previously called but never defined.
 
     Args:
         topic: Selected topic object
@@ -4270,8 +4207,6 @@ def generate_selection_rationale(topic: Any) -> str:
 def identify_target_audience(topic: Any) -> str:
     """
     Identify who should care about this topic.
-
-    FIX: Previously called but never defined.
 
     Args:
         topic: Topic object
@@ -4566,7 +4501,7 @@ suggested_angles_by_type = {
 #### Output Schema
 
 ```python
-from dataclasses import dataclass, field  # FIX: Added 'field' import (was missing)
+from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Union, Any
 from datetime import datetime
 from enum import Enum
@@ -4606,7 +4541,7 @@ class TopPickSummary:
 
 from typing import Literal
 
-# LOW PRIORITY FIX #7: Valid values for enumerated fields
+# Valid values for enumerated fields
 VALID_ENTERPRISE_SCALES = ["SMB", "Mid-Market", "Enterprise", "Fortune 500"]
 VALID_COMPLEXITY_LEVELS = ["simplify_heavily", "simplify_slightly", "keep_technical"]
 VALID_CONTROVERSY_LEVELS = ["low", "medium", "high", "spicy"]
@@ -4614,18 +4549,6 @@ VALID_CONTROVERSY_LEVELS = ["low", "medium", "high", "spicy"]
 
 # ═══════════════════════════════════════════════════════════════════
 # HOOK STYLE ENUM
-# ═══════════════════════════════════════════════════════════════════
-#
-# FIX: Created unified HookStyle enum to resolve naming inconsistencies
-# between type_extraction_config and TYPE_CONTEXTS.
-#
-# Each hook style has TWO names:
-# - The enum VALUE is the canonical name (used for storage/serialization)
-# - The aliases are for backward compatibility and human readability
-#
-# Usage:
-#   hook_style = HookStyle.METRICS  # Use enum directly
-#   hook_style.value -> "metrics"   # For serialization
 # ═══════════════════════════════════════════════════════════════════
 
 class HookStyle(Enum):
@@ -4683,7 +4606,7 @@ class HookStyle(Enum):
 
 class VisualType(str, Enum):
     """
-    FIX-025: Types of visual content for posts.
+    Types of visual content for posts.
     Replace hardcoded strings with enum for type safety.
     """
     DATA_VIZ = "data_viz"
@@ -4710,16 +4633,6 @@ class VisualType(str, Enum):
 
 # ═══════════════════════════════════════════════════════════════════
 # SINGLE SOURCE OF TRUTH FOR HOOK STYLES
-# ═══════════════════════════════════════════════════════════════════
-#
-# FIX: This mapping is THE authoritative source for allowed hook styles.
-# The `hook_styles` field in `type_extraction_config` references these
-# values. Do NOT duplicate this mapping elsewhere.
-#
-# When adding new hook styles:
-# 1. Add to HookStyle enum above
-# 2. Add to this mapping
-# 3. The type_extraction_config will automatically use get_hook_styles_for_type()
 # ═══════════════════════════════════════════════════════════════════
 CONTENT_TYPE_HOOK_STYLES: Dict[ContentType, List[HookStyle]] = {
     ContentType.ENTERPRISE_CASE: [
@@ -4787,7 +4700,6 @@ class EnterpriseCaseMetadata:
     architecture_available: bool
     lessons_learned: List[str] = field(default_factory=list)
 
-    # LOW PRIORITY FIX #7: Add field validation
     def __post_init__(self):
         """Validate field values against allowed options."""
         if self.scale not in VALID_ENTERPRISE_SCALES:
@@ -4805,7 +4717,6 @@ class EnterpriseCaseMetadata:
     team_size: Optional[str] = None
 
 
-# FIX: Validation constants for metadata classes
 VALID_SOURCE_TYPES = ["research_paper", "think_tank_report", "expert_essay", "whitepaper"]
 VALID_REPRODUCIBILITY_LEVELS = ["high", "medium", "low"]
 VALID_PLATFORMS = ["YouTube", "Reddit", "HackerNews", "Dev.to", "Twitter", "Medium", "Substack"]
@@ -4833,7 +4744,6 @@ class PrimarySourceMetadata:
     counterintuitive_finding: Optional[str] = None
     citations_count: Optional[int] = None
 
-    # FIX: Add __post_init__ validation
     def __post_init__(self):
         """Validate field values against allowed options."""
         if self.source_type not in VALID_SOURCE_TYPES:
@@ -4868,7 +4778,6 @@ class AutomationCaseMetadata:
     time_saved: Optional[str] = None
     cost_saved: Optional[str] = None
 
-    # FIX: Add __post_init__ validation
     def __post_init__(self):
         """Validate field values against allowed options."""
         if self.reproducibility not in VALID_REPRODUCIBILITY_LEVELS:
@@ -4899,7 +4808,6 @@ class CommunityContentMetadata:
     has_demo: bool
     key_contributors: List[str] = field(default_factory=list)
 
-    # FIX: Add __post_init__ validation
     def __post_init__(self):
         """Validate field values against allowed options."""
         if self.platform not in VALID_PLATFORMS:
@@ -4937,7 +4845,6 @@ class ToolReleaseMetadata:
     competing_tools: List[str]
     early_reviews: List[str]
 
-    # FIX: Add __post_init__ validation
     def __post_init__(self):
         """Validate field values against allowed options."""
         if self.release_type not in VALID_RELEASE_TYPES:
@@ -5067,7 +4974,6 @@ class TrendTopic:
     discovered_at: datetime
     source_published_at: Optional[datetime]
 
-    # LOW PRIORITY FIX #1: Add __repr__ for better debugging
     def __repr__(self) -> str:
         """Concise representation for debugging."""
         top_pick_marker = "⭐" if self.is_top_pick else ""
@@ -5215,7 +5121,6 @@ type_extraction_config = {
             "What's the replicable insight for other companies?",
             "What would they do differently?"
         ],
-        # FIX: Use get_hook_styles_for_type() - single source of truth
         "hook_styles": get_hook_styles_for_type(ContentType.ENTERPRISE_CASE),
         "recommended_post_formats": ["insight_thread", "personal_story"],
         "visual_recommendation": "data_visualization or architecture_diagram"
@@ -5241,7 +5146,6 @@ type_extraction_config = {
             "How does this change practical AI work?",
             "What's the 'so what' for practitioners?"
         ],
-        # FIX: Use get_hook_styles_for_type() - single source of truth
         "hook_styles": get_hook_styles_for_type(ContentType.PRIMARY_SOURCE),
         "recommended_post_formats": ["contrarian", "insight_thread"],
         "visual_recommendation": "concept_illustration or quote_card"
@@ -5269,7 +5173,6 @@ type_extraction_config = {
             "What tools are required?",
             "What are the gotchas?"
         ],
-        # FIX: Use get_hook_styles_for_type() - single source of truth
         "hook_styles": get_hook_styles_for_type(ContentType.AUTOMATION_CASE),
         "recommended_post_formats": ["tutorial_light", "insight_thread"],
         "visual_recommendation": "workflow_diagram or carousel"
@@ -5295,7 +5198,6 @@ type_extraction_config = {
             "Where do experts disagree?",
             "What's the real-world signal vs hype?"
         ],
-        # FIX: Use get_hook_styles_for_type() - single source of truth
         "hook_styles": get_hook_styles_for_type(ContentType.COMMUNITY_CONTENT),
         "recommended_post_formats": ["list_post", "question_based"],
         "visual_recommendation": "quote_card or screenshot"
@@ -5322,7 +5224,6 @@ type_extraction_config = {
             "Who should care about this?",
             "What's the killer feature?"
         ],
-        # FIX: Use get_hook_styles_for_type() - single source of truth
         "hook_styles": get_hook_styles_for_type(ContentType.TOOL_RELEASE),
         "recommended_post_formats": ["insight_thread", "list_post"],
         "visual_recommendation": "product_screenshot or comparison_chart"
@@ -5835,7 +5736,7 @@ class Insight:
 @dataclass
 class Hook:
     text: str
-    style: HookStyle  # FIX: Use HookStyle enum for type safety (was str)
+    style: HookStyle
     content_type_fit: float  # 0-1 how well this fits the content type
 
 
@@ -5919,7 +5820,6 @@ class CommunityContentExtraction:
     platform: str
     key_viewpoints: List[str]
 
-    # FIX: Added missing fields referenced in extraction prompts
     main_discussion_topic: Optional[str] = None  # What the discussion is about
     engagement_level: Optional[str] = None       # high / medium / low
     best_insight_shared: Optional[str] = None    # Most valuable insight from discussion
@@ -5944,7 +5844,6 @@ class ToolReleaseExtraction:
     key_features: List[str]
     target_users: str
 
-    # FIX: Added missing fields referenced in extraction prompts
     company: Optional[str] = None           # Company releasing the tool
     release_date: Optional[str] = None      # When it was released
     release_type: Optional[str] = None      # new_product / major_update / api_release / open_source
@@ -6006,7 +5905,7 @@ def validate_extraction_type(content_type: ContentType, extraction: ExtractionDa
 
 # ═══════════════════════════════════════════════════════════════════════════
 # LEGACY ALIAS (for backward compatibility during migration)
-# LOW PRIORITY FIX #13: Lazy deprecation warning - only warns on actual use
+# Lazy deprecation warning - only warns on actual use
 # ═══════════════════════════════════════════════════════════════════════════
 
 def __getattr__(name: str):
@@ -6026,32 +5925,7 @@ def __getattr__(name: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# FIX #11: METADATA → EXTRACTION FIELD MAPPING
-# ═══════════════════════════════════════════════════════════════════════════
-#
-# TopicMetadata (from TrendScout) and ExtractionData (from Analyzer) have
-# INTENTIONALLY DIFFERENT purposes:
-#
-# - TopicMetadata: What TrendScout OBSERVED about the source (metadata about the topic)
-# - ExtractionData: What Analyzer EXTRACTED from the content (detailed analysis)
-#
-# Field differences are BY DESIGN:
-#
-# ENTERPRISE_CASE:
-#   Metadata.metrics (Dict[str,str])      → Extraction.metrics_extracted (Dict[str,str]) ✓ same
-#   Metadata.roi_mentioned (bool)         → Extraction.roi_stated (Optional[str]) - bool→str detail
-#   Metadata.architecture_available (bool)→ Extraction.architecture_notes (str) - bool→str detail
-#   Metadata.scale (str)                  → NOT in Extraction (Scout-only context)
-#   Metadata.problem_domain (str)         → Extraction.problem_statement (more specific)
-#
-# PRIMARY_SOURCE:
-#   Metadata.key_hypothesis (str)         → Extraction.thesis (same concept, different name)
-#   Metadata.methodology_summary (str)    → Extraction.methodology (same concept)
-#   Metadata.code_available (bool)        → NOT in Extraction (Scout-only metadata)
-#
-# These differences are correct - Scout provides surface metadata,
-# Analyzer provides deep extraction.
-#
+# METADATA TO EXTRACTION FIELD MAPPING
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -6060,7 +5934,7 @@ def seed_extraction_from_metadata(
     content_type: ContentType
 ) -> ExtractionData:
     """
-    FIX #11: Create a pre-populated extraction from metadata.
+    Create a pre-populated extraction from metadata.
 
     Use this to give Analyzer a starting point when metadata already
     contains relevant information. Analyzer should ENHANCE, not replace.
@@ -6129,12 +6003,7 @@ def seed_extraction_from_metadata(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# FIX #12: BOUNDARY VALIDATION FUNCTIONS
-# ═══════════════════════════════════════════════════════════════════════════
-#
-# These validators run at agent BOUNDARIES to catch errors early.
-# Fail-fast philosophy: detect issues at handoff, not downstream.
-#
+# BOUNDARY VALIDATION FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
 
@@ -6151,7 +6020,7 @@ class BoundaryValidationError(Exception):
 
 def validate_trend_scout_to_analyzer(topic: "TrendTopic") -> None:
     """
-    FIX #12: Validate TrendScout output before passing to Analyzer.
+    Validate TrendScout output before passing to Analyzer.
 
     Raises:
         BoundaryValidationError: If validation fails
@@ -6182,7 +6051,7 @@ def validate_trend_scout_to_analyzer(topic: "TrendTopic") -> None:
 
 def validate_analyzer_to_writer(brief: "AnalysisBrief") -> None:
     """
-    FIX #12: Validate Analyzer output before passing to Writer.
+    Validate Analyzer output before passing to Writer.
 
     Raises:
         BoundaryValidationError: If validation fails
@@ -6218,12 +6087,7 @@ def _validate_extraction_completeness(
     content_type: ContentType,
     extraction: ExtractionData
 ) -> List[str]:
-    """
-    Check that required extraction fields are populated.
-
-    FIX: Added missing required field validations per Analyzer Agent analysis.
-    Each content type now validates ALL its required fields.
-    """
+    """Check that required extraction fields are populated."""
     issues = []
 
     if content_type == ContentType.ENTERPRISE_CASE:
@@ -6280,15 +6144,13 @@ def _validate_extraction_completeness(
 
 def validate_writer_to_humanizer(draft: "DraftPost") -> None:
     """
-    FIX #12: Validate Writer output before passing to Humanizer.
-    FIX: Corrected class name (WriterDraft -> DraftPost) and field names.
+    Validate Writer output before passing to Humanizer.
 
     Raises:
         BoundaryValidationError: If validation fails
     """
     issues = []
 
-    # FIX: Use correct field names (full_text, not post_text; hook_style, not hook_used)
     if not draft.full_text or len(draft.full_text) < 200:
         issues.append("full_text too short (min 200 chars)")
     if len(draft.full_text) > 3000:
@@ -6302,13 +6164,7 @@ def validate_writer_to_humanizer(draft: "DraftPost") -> None:
 
 def validate_humanizer_to_visual(post: "HumanizedPost") -> None:
     """
-    FIX: Added - Validate Humanizer output before passing to Visual Creator.
-
-    Checks:
-    - visual_brief is present (required for image generation)
-    - visual_type is valid
-    - length_in_range is True
-    - hook_in_limit is True
+    Validate Humanizer output before passing to Visual Creator.
 
     Raises:
         BoundaryValidationError: If validation fails
@@ -6344,7 +6200,7 @@ def validate_visual_to_qc(
     post: "HumanizedPost"
 ) -> None:
     """
-    FIX #12: Validate Visual + Post before passing to QC.
+    Validate Visual + Post before passing to QC.
 
     Raises:
         BoundaryValidationError: If validation fails
@@ -6396,7 +6252,7 @@ class AnalysisBrief:
 
     # Hooks (type-specific styles)
     hooks: List[Hook]  # 5 hooks using type-appropriate styles
-    recommended_hook_style: HookStyle  # FIX: Use HookStyle enum for type safety
+    recommended_hook_style: HookStyle
 
     # Controversy analysis
     controversy_level: str  # low/medium/high/spicy
@@ -6425,7 +6281,6 @@ class AnalysisBrief:
     extraction_completeness: float  # 0-1 how much required data was found
     confidence_score: float  # 0-1 confidence in analysis quality
 
-    # LOW PRIORITY FIX #1: Add __repr__ for better debugging
     def __repr__(self) -> str:
         """Concise representation for debugging."""
         return (
@@ -7502,7 +7357,7 @@ class DraftPost:
     # Template info
     template_used: str
     template_category: str  # universal / enterprise / research / automation / etc.
-    hook_style: HookStyle  # FIX: Use HookStyle enum for type safety
+    hook_style: HookStyle
 
     # Metadata
     character_count: int
@@ -7922,16 +7777,16 @@ class HumanizedPost:
     """
     Output of Humanizer Agent.
 
-    FIX: Added fields to preserve DraftPost structure for downstream agents.
+    Added fields to preserve DraftPost structure for downstream agents.
     Visual Creator needs visual_brief, QC Agent needs length metrics.
     """
     id: str
     original_draft_id: str
-    topic_id: str  # FIX: Added - traceability to original topic
+    topic_id: str
     content_type: ContentType
 
     # ─────────────────────────────────────────────────────────────────
-    # STRUCTURED CONTENT (FIX: preserve structure from DraftPost)
+    # STRUCTURED CONTENT (preserve structure from DraftPost)
     # ─────────────────────────────────────────────────────────────────
     hook: str                    # Humanized first line (must fit in 210 chars)
     body: str                    # Humanized main content
@@ -7940,21 +7795,21 @@ class HumanizedPost:
     humanized_text: str          # Full combined text (hook + body + cta + hashtags)
 
     # ─────────────────────────────────────────────────────────────────
-    # LENGTH METRICS (FIX: added for QC validation)
+    # LENGTH METRICS (added for QC validation)
     # ─────────────────────────────────────────────────────────────────
     character_count: int
     hook_in_limit: bool          # Is hook under 210 chars?
     length_in_range: bool        # Is total length in target range (1200-3000)?
 
     # ─────────────────────────────────────────────────────────────────
-    # VISUAL BRIEF (FIX: preserve for Visual Creator)
+    # VISUAL BRIEF (preserve for Visual Creator)
     # ─────────────────────────────────────────────────────────────────
     visual_brief: str            # Description for image generation
     visual_type: str             # data_viz / diagram / screenshot / quote_card
     key_terms: List[str]         # For hashtag optimization and visual keywords
 
     # ─────────────────────────────────────────────────────────────────
-    # TEMPLATE METADATA (FIX: preserve for analytics)
+    # TEMPLATE METADATA (preserve for analytics)
     # ─────────────────────────────────────────────────────────────────
     template_used: Optional[str] = None
     hook_style: Optional[str] = None
@@ -7984,7 +7839,7 @@ class HumanizedPost:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# HUMANIZATION QUALITY METRICS (FIX: Added missing calculation functions)
+# HUMANIZATION QUALITY METRICS (Added missing calculation functions)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def calculate_humanness_score(
@@ -8524,7 +8379,7 @@ class PhotoLibrary:
         if photo_id in self._cache:
             photo = self._cache[photo_id]
             photo.times_used += 1
-            photo.last_used_date = utc_now()  # FIX-024: Use timezone-aware datetime
+            photo.last_used_date = utc_now()
             photo.last_used_post_id = post_id
 
         await self.db.update_photo_usage(photo_id, post_id)
@@ -8541,7 +8396,7 @@ class PhotoLibrary:
         exclude_recently_used: bool = True
     ) -> List[PhotoMetadata]:
         """
-        FIX-011: Search photos by criteria. Method was called but never defined.
+        Search photos by criteria.
 
         Args:
             settings: Filter by photo settings (e.g., ["office", "outdoor"])
@@ -8582,10 +8437,54 @@ class PhotoLibrary:
 
     @property
     def recent_used_ids(self) -> set:
-        """FIX-011b: Property for recently used photo IDs (sync version for quick access)."""
+        """Property for recently used photo IDs (sync version for quick access)."""
         # Note: This is a sync property that returns cached recent IDs
         # For fresh data, use _get_recent_photo_ids()
         return getattr(self, '_recent_ids_cache', set())
+```
+
+---
+
+#### Helper Functions for Photo Integration
+
+```python
+def _generate_contextual_edit_prompt(post_content: str, content_type: ContentType) -> str:
+    """
+    Generate an AI edit prompt for photo integration based on post context.
+    Used when integration_mode is 'photo_ai_edit'.
+
+    Returns a prompt for image AI tools like Midjourney or DALL-E.
+    """
+    # Base style based on content type
+    style_map = {
+        ContentType.ENTERPRISE_CASE: "professional, corporate lighting, subtle overlay",
+        ContentType.PRIMARY_SOURCE: "clean, research-focused, data visualization overlay",
+        ContentType.AUTOMATION_CASE: "tech-forward, workflow diagrams, connection lines",
+        ContentType.COMMUNITY_CONTENT: "conversational, social media friendly, quote overlay",
+        ContentType.TOOL_RELEASE: "product-focused, demo style, interface mockup overlay",
+    }
+
+    base_style = style_map.get(content_type, "professional LinkedIn style")
+
+    # Extract key themes from post content
+    themes = []
+    if "результат" in post_content.lower() or "result" in post_content.lower():
+        themes.append("success visualization")
+    if "процесс" in post_content.lower() or "process" in post_content.lower():
+        themes.append("workflow elements")
+    if any(word in post_content.lower() for word in ["увеличил", "grew", "boost", "рост"]):
+        themes.append("growth indicators")
+
+    theme_str = ", ".join(themes) if themes else "professional context"
+
+    return f"""
+    Edit this author photo with:
+    - Style: {base_style}
+    - Theme elements: {theme_str}
+    - Keep face clearly visible and professional
+    - Add subtle branded elements if appropriate
+    - Maintain authentic, not over-produced look
+    """
 ```
 
 ---
@@ -8623,7 +8522,7 @@ async def select_photo_for_post(
         )
 
     # Step 2: Find matching photos
-    candidates = photo_library.search(
+    candidates = await photo_library.search(
         settings=config.get("preferred_settings", ["any"]),
         poses=config.get("preferred_poses", ["any"]),
         attire=config.get("preferred_attire", ["any"]),
@@ -9095,6 +8994,67 @@ class NanoBananaGenerator:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS FOR INTERFACE VISUAL GENERATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _detect_product_category(mentioned_products: List[str]) -> str:
+    """
+    Detect the product category from mentioned products.
+    Used to select appropriate interface generation prompts.
+
+    Args:
+        mentioned_products: List of product/tool names mentioned in the post
+
+    Returns:
+        Category string: "crm", "ai_chat", "automation", "dashboard", "code_editor", "generic"
+    """
+    # Normalize product names
+    products_lower = [p.lower() for p in mentioned_products]
+    products_str = " ".join(products_lower)
+
+    # Category detection rules
+    crm_keywords = {"salesforce", "hubspot", "kommo", "pipedrive", "zoho", "crm", "bitrix"}
+    ai_keywords = {"chatgpt", "claude", "gpt", "gemini", "copilot", "ai assistant", "llm"}
+    automation_keywords = {"zapier", "make", "n8n", "integromat", "automate", "workflow", "integration"}
+    dashboard_keywords = {"analytics", "dashboard", "metrics", "tableau", "looker", "grafana", "report"}
+    code_keywords = {"vscode", "cursor", "github", "gitlab", "ide", "code", "terminal", "api"}
+
+    # Check categories in order of specificity
+    if any(kw in products_str for kw in crm_keywords):
+        return "crm"
+    elif any(kw in products_str for kw in ai_keywords):
+        return "ai_chat"
+    elif any(kw in products_str for kw in automation_keywords):
+        return "automation"
+    elif any(kw in products_str for kw in dashboard_keywords):
+        return "dashboard"
+    elif any(kw in products_str for kw in code_keywords):
+        return "code_editor"
+    else:
+        return "generic"
+
+
+def _select_composition_mode(content_type: ContentType, post_content: str) -> str:
+    """Select visual composition mode based on content type and post."""
+    # Default composition modes by content type
+    type_compositions = {
+        ContentType.ENTERPRISE_CASE: "split_screen",  # Person + interface
+        ContentType.PRIMARY_SOURCE: "overlay",  # Data overlay on photo
+        ContentType.AUTOMATION_CASE: "workflow",  # Workflow diagram style
+        ContentType.COMMUNITY_CONTENT: "quote_card",  # Quote with interface bg
+        ContentType.TOOL_RELEASE: "demo",  # Product demo style
+    }
+
+    # Override based on content signals
+    if "сравнение" in post_content.lower() or "vs" in post_content.lower():
+        return "comparison"
+    if "до и после" in post_content.lower() or "before" in post_content.lower():
+        return "before_after"
+
+    return type_compositions.get(content_type, "split_screen")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # MUTEX FOR NANO BANANA CLIENT
 # Prevents race conditions when multiple pipeline runs share the same client
 #
@@ -9118,16 +9078,11 @@ async def generate_interface_visual(
     mentioned_products: List[str],
     visual_brief: str,
     nano_banana: NanoBananaGenerator,
-    timeout_seconds: int = 180  # FIX #15: Configurable timeout
+    timeout_seconds: int = 180
 ) -> VisualAsset:
     """
     Generate interface visual using Nano Banana Pro.
     Everything is AI-generated — no real screenshots needed.
-
-    MEDIUM PRIORITY FIX #15:
-    - Added mutex lock to prevent race conditions when sharing Nano Banana client
-    - Added configurable timeout for image generation
-    - Added logging for debugging and monitoring
 
     Args:
         post_content: The post text to contextualize the visual
@@ -9211,7 +9166,6 @@ async def generate_interface_visual(
         start_time = datetime.now()
 
         try:
-            # FIX-012: Use the actual generate() method which IS defined
             # Also fix deprecated get_event_loop() usage
             prompt = f"""Create an interface visual for {product_category}.
 Purpose: {visual_brief}
@@ -10252,12 +10206,12 @@ qc_rubric_universal = {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════
-# FIX #4: Use centralized THRESHOLD_CONFIG instead of hardcoded values
-# This ensures consistency with ThresholdConfig and enables runtime tuning
+# ═══════════════════════════════════════════════════════════════════════════
+# DECISION THRESHOLDS
 # ═══════════════════════════════════════════════════════════════════════════
 decision_thresholds = {
     "pass": THRESHOLD_CONFIG.min_score_to_proceed,        # Default: 8.0
-    "revise": THRESHOLD_CONFIG.revision_threshold,        # FIX: Use revision_threshold (7.0), not rejection_threshold
+    "revise": THRESHOLD_CONFIG.revision_threshold,
     "reject": THRESHOLD_CONFIG.rejection_threshold,       # Default: 5.5
     "auto_publish": THRESHOLD_CONFIG.auto_publish_threshold,  # Default: 9.0
 }
@@ -10270,13 +10224,9 @@ decision_thresholds = {
 #### Helper Functions for Scoring
 
 ```python
-# FIX: These functions were called but never defined
-
 def calculate_weighted_score(scores: Dict[str, float], type_config: dict) -> float:
     """
     Calculate weighted aggregate score based on content-type weights.
-
-    FIX: Previously called but undefined, causing NameError.
 
     Args:
         scores: Dict of criterion_name -> score (1-10)
@@ -10307,8 +10257,6 @@ def get_type_aware_suggestion(
 ) -> str:
     """
     Get content-type-specific improvement suggestion for a criterion.
-
-    FIX: Previously called but undefined, causing NameError.
 
     Args:
         criterion: Name of the scoring criterion
@@ -10598,7 +10546,6 @@ class ContentEvaluation:
         """Check if evaluation passes the threshold."""
         return self.decision == EvaluationDecision.PASS
 
-    # LOW PRIORITY FIX #1: Add __repr__ for better debugging
     def __repr__(self) -> str:
         """Concise representation for debugging."""
         decision_emoji = {
@@ -10629,7 +10576,6 @@ class ContentEvaluation:
         import uuid
 
         # Calculate aggregate score
-        # FIX: If weighted_score = score * weight, don't divide again
         # Correct formula: sum of (score * weight) / sum of weights
         total_weight = sum(cf.weight for cf in criterion_feedback.values())
         aggregate_score = sum(cf.score * cf.weight for cf in criterion_feedback.values()) / total_weight
@@ -10656,7 +10602,7 @@ class ContentEvaluation:
             weaknesses=weaknesses,
             actionable_suggestions=suggestions,
             decision=decision,
-            evaluated_at=utc_now(),  # FIX-024: Use timezone-aware datetime
+            evaluated_at=utc_now(),
             evaluator_model=evaluator_model,
             threshold_used=threshold,
             weights_used={cf.criterion: cf.weight for cf in criterion_feedback.values()}
@@ -10722,11 +10668,10 @@ class ApprovedPost:
     # ─────────────────────────────────────────────────────────────────
     # Analytics Metadata (for feedback loop)
     # ─────────────────────────────────────────────────────────────────
-    hook_style: Optional[HookStyle] = None  # FIX: Made Optional - may not be set in all cases
+    hook_style: Optional[HookStyle] = None
     template_used: str = ""
     has_author_photo: bool = False
 
-    # LOW PRIORITY FIX #1: Add __repr__ for better debugging
     def __repr__(self) -> str:
         """Concise representation for debugging."""
         approval_emoji = "🤖" if self.approval_type == "auto" else "👤"
@@ -10740,10 +10685,7 @@ class ApprovedPost:
 
     @staticmethod
     def _get_hook_style_from_state(state: dict) -> Optional[HookStyle]:
-        """
-        FIX: Properly convert hook_style from state to HookStyle enum.
-        Previously used empty string default which is incompatible with HookStyle type.
-        """
+        """Convert hook_style from state to HookStyle enum."""
         hook_style_value = state.get("hook_style_used")
         if hook_style_value is None:
             return None
@@ -10790,12 +10732,11 @@ class ApprovedPost:
             revision_count=state.get("revision_count", 0),
             approval_type=approval_type,
             approved_by=approved_by,
-            approved_at=utc_now(),  # FIX-024: Use timezone-aware datetime
+            approved_at=utc_now(),
             pipeline_run_id=state["run_id"],
             topic_id=state["selected_topic"].id,
             draft_id=state["draft_post"].id,
             humanized_post_id=humanized.id,
-            # FIX: Properly handle HookStyle enum - convert string to enum if needed
             hook_style=cls._get_hook_style_from_state(state),
             template_used=state.get("template_used", ""),
             has_author_photo=visual.photo_used if visual and hasattr(visual, 'photo_used') else False
@@ -10813,7 +10754,7 @@ class QCResult:
     Quality Control evaluation result.
 
     ═══════════════════════════════════════════════════════════════════════════
-    FIX: RESPONSIBILITY SEPARATION - QC Agent focuses on DECISION, not suggestions
+    RESPONSIBILITY SEPARATION - QC Agent focuses on DECISION, not suggestions
     ═══════════════════════════════════════════════════════════════════════════
 
     QC Agent is responsible for:
@@ -10854,9 +10795,7 @@ class QCResult:
     type_requirements_met: List[str]
     type_requirements_missing: List[str]
 
-    # ─────────────────────────────────────────────────────────────────
-    # FIX #21: Visual Evaluation Integration
-    # ─────────────────────────────────────────────────────────────────
+    # Visual Evaluation Integration
     visual_evaluation: Optional["VisualEvaluation"] = None  # From VisualQualityEvaluator
     combined_score: Optional[float] = None  # Text (75%) + Visual (25%)
     revision_targets: Optional[Dict[str, bool]] = None  # {"text": bool, "visual": bool}
@@ -10869,11 +10808,7 @@ class QCResult:
 
 @dataclass
 class QCOutput:
-    """
-    Complete QC output with decision and next steps.
-
-    FIX #21: Now handles visual revision routing.
-    """
+    """Complete QC output with decision and next steps."""
     result: QCResult
 
     # Routing decision (expanded for visual)
@@ -10883,7 +10818,7 @@ class QCOutput:
     revision_instructions: Optional[str]
     priority_improvements: List[str]
 
-    # FIX #21: Separate revision instructions by target
+    # Separate revision instructions by target
     text_revision_instructions: Optional[List[str]] = None  # For Writer/Humanizer
     visual_revision_instructions: Optional[List[str]] = None  # For Visual Creator
 
@@ -10978,7 +10913,6 @@ from datetime import datetime
 from enum import Enum
 
 # Import all data classes from centralized models
-# FIX: Use full path to avoid import conflicts with module-specific models.py files
 from src.models import (
     ContentType,
     TrendTopic, TrendScoutOutput,
@@ -11066,7 +11000,6 @@ class PipelineState(TypedDict):
 
     # ═══════════════════════════════════════════════════════════════════
     # REJECT/RESTART TRACKING
-    # FIX: Previously referenced but never declared fields
     # ═══════════════════════════════════════════════════════════════════
     _reject_restart_count: int  # How many times topic was rejected and restarted
     _rejected_topics: List[str]  # IDs of topics rejected by QC
@@ -11138,7 +11071,6 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
 
             # Writer config
             "preferred_templates": ["METRICS_HERO", "LESSONS_LEARNED", "HOW_THEY_DID_IT"],
-            # FIX: Use get_hook_styles_for_type() to ensure single source of truth
             "hook_styles": get_hook_styles_for_type(ContentType.ENTERPRISE_CASE),
             "cta_style": "credibility_expert",
 
@@ -11162,7 +11094,6 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "required_fields": ["thesis", "key_findings", "authors"],
 
             "preferred_templates": ["RESEARCH_INSIGHT", "CONTRARIAN_TAKE", "FUTURE_PREDICTION"],
-            # FIX: Use get_hook_styles_for_type() to ensure single source of truth
             "hook_styles": get_hook_styles_for_type(ContentType.PRIMARY_SOURCE),
             "cta_style": "intellectual_discourse",
 
@@ -11183,7 +11114,6 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "required_fields": ["task_automated", "tools_used", "workflow_steps"],
 
             "preferred_templates": ["HOW_TO_GUIDE", "TOOL_STACK_REVEAL", "AUTOMATION_STORY"],
-            # FIX: Use get_hook_styles_for_type() to ensure single source of truth
             "hook_styles": get_hook_styles_for_type(ContentType.AUTOMATION_CASE),
             "cta_style": "practical_action",
 
@@ -11204,7 +11134,6 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "required_fields": ["platform", "key_insights"],
 
             "preferred_templates": ["COMMUNITY_SPOTLIGHT", "DISCUSSION_SUMMARY", "PERSONAL_STORY"],
-            # FIX: Use get_hook_styles_for_type() to ensure single source of truth
             "hook_styles": get_hook_styles_for_type(ContentType.COMMUNITY_CONTENT),
             "cta_style": "community_engagement",
 
@@ -11225,7 +11154,6 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "required_fields": ["tool_name", "key_features"],
 
             "preferred_templates": ["PRODUCT_LAUNCH", "TOOL_COMPARISON", "FIRST_LOOK"],
-            # FIX: Use get_hook_styles_for_type() to ensure single source of truth
             "hook_styles": get_hook_styles_for_type(ContentType.TOOL_RELEASE),
             "cta_style": "evaluation_try",
 
@@ -11296,7 +11224,6 @@ def create_content_pipeline():
     # Error handling node
     workflow.add_node("handle_error", error_handler_node)
 
-    # FIX: Reset node for reject_restart to prevent infinite loops
     # This resets counters while incrementing restart count
     workflow.add_node("reset_for_restart", reset_for_restart_node)
 
@@ -11407,14 +11334,13 @@ def create_content_pipeline():
             "revise_writer": "write",
             "revise_humanizer": "humanize",
             "revise_visual": "visualize",
-            "revise_both": "write",  # FIX: Handle "revise_both" - starts with text, visual_creator checks state
-            "reject_restart": "reset_for_restart",  # FIX: Go through reset node first
+            "revise_both": "write",
+            "reject_restart": "reset_for_restart",
             "max_revisions_force": "manual_review_queue",
             "handle_error": "handle_error"  # Added error route
         }
     )
 
-    # FIX: Add reset_for_restart edge to scout
     # This node resets state counters to prevent infinite loops
     workflow.add_edge("reset_for_restart", "scout")
 
@@ -11491,7 +11417,7 @@ class PipelineRecoveryManager:
         # Query checkpointer for recent runs
         from datetime import timedelta
 
-        cutoff = utc_now() - timedelta(hours=hours_back)  # FIX-024: Use timezone-aware datetime
+        cutoff = utc_now() - timedelta(hours=hours_back)
         recoverable = []
 
         # Get all thread_ids (run_ids) from checkpointer
@@ -11642,14 +11568,12 @@ def get_recovery_manager() -> PipelineRecoveryManager:
 @with_timeout(node_name="manual_review_queue")
 async def queue_for_manual_review(state: PipelineState) -> Dict[str, Any]:
     """
-    FIX-028: Added missing decorators for consistency with other nodes.
     Queue post for manual human review.
     Used when max revisions reached but quality still below threshold.
 
     This is better than auto-publishing low quality content.
     Human can: approve, edit, or reject.
     """
-    # FIX-028b: Safe state access
     humanized_post = state.get("humanized_post")
     if not humanized_post:
         return {"critical_error": "Missing humanized_post for manual review"}
@@ -11724,7 +11648,7 @@ from functools import wraps
 
 # ─────────────────────────────────────────────────────────────────────
 # TIMEOUT CONFIGURATION
-# MEDIUM PRIORITY FIX #5: Configurable via environment variables
+# Configurable via environment variables
 # ─────────────────────────────────────────────────────────────────────
 
 import os
@@ -11735,7 +11659,7 @@ class NodeTimeoutsConfig:
     """
     Centralized timeout configuration for pipeline nodes.
 
-    MEDIUM PRIORITY FIX #5: Moved from hardcoded dict to configurable class.
+    Moved from hardcoded dict to configurable class.
     Timeouts can be overridden via environment variables for tuning.
 
     Environment variables:
@@ -11798,7 +11722,7 @@ def with_error_handling(node_name: str = None):
     """
     Decorator to convert node exceptions to critical_error state updates.
 
-    FIX: Previously, exceptions in nodes would bypass the state machine's
+    Previously, exceptions in nodes would bypass the state machine's
     error routing. This decorator catches exceptions and converts them
     to {"critical_error": str, "error_stage": str} returns.
 
@@ -11835,7 +11759,7 @@ def with_error_handling(node_name: str = None):
 def with_timeout(timeout_seconds: int = None, node_name: str = None):
     """
     Decorator to add timeout to async node functions.
-    FIX-014: Use local variable instead of mutating closure.
+    Use local variable instead of mutating closure.
 
     Usage:
         @with_timeout(60)
@@ -11848,7 +11772,6 @@ def with_timeout(timeout_seconds: int = None, node_name: str = None):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # FIX-014: Calculate timeout locally without mutating closure
             actual_timeout = timeout_seconds
             if actual_timeout is None:
                 name = node_name or func.__name__.replace("_node", "")
@@ -12081,7 +12004,6 @@ async def meta_evaluate_node(state: PipelineState) -> Dict[str, Any]:
     draft = state["draft_post"]
     content_type = state["content_type"]
     iteration = state.get("meta_iteration", 0)
-    # FIX: Use centralized config instead of hardcoded magic number
     max_iterations = THRESHOLD_CONFIG.get_max_meta_iterations()
 
     # Force pass if max iterations reached
@@ -12113,7 +12035,7 @@ async def meta_evaluate_node(state: PipelineState) -> Dict[str, Any]:
         "suggestions": evaluation.suggestions,
         "timestamp": utc_now().isoformat()
     }
-    # LOW PRIORITY FIX #11: Limit history to prevent memory leak
+    # Limit history to prevent memory leak
     # Uses MAX_CRITIQUE_HISTORY from HistoryLimits
     critique_history = (
         state.get("meta_critique_history", []) + [critique_entry]
@@ -12195,7 +12117,7 @@ async def visual_creator_node(state: PipelineState) -> Dict[str, Any]:
 
     TIMEOUT: 180 seconds (image generation can be slow)
 
-    FIX: Added revision_instructions handling (was missing, unlike writer_node and humanizer_node)
+    Added revision_instructions handling (was missing, unlike writer_node and humanizer_node)
     """
     # NOTE: Removed state mutation - use return value only
     content_type = state["content_type"]
@@ -12207,7 +12129,6 @@ async def visual_creator_node(state: PipelineState) -> Dict[str, Any]:
     visual_formats = type_context.get("visual_formats", ["single_image"])
     color_scheme = type_context.get("color_scheme", "brand_default")
 
-    # FIX: Check if this is a revision (from QC feedback)
     # Previously, visual_creator_node ignored revision instructions entirely
     revision_instructions = None
     if state.get("current_revision_target") == "visual":
@@ -12230,7 +12151,7 @@ async def visual_creator_node(state: PipelineState) -> Dict[str, Any]:
         content_type=content_type,
         allowed_formats=visual_formats,
         color_scheme=color_scheme,
-        revision_instructions=revision_instructions  # FIX: Pass revision feedback
+        revision_instructions=revision_instructions
     )
 
     return {
@@ -12238,7 +12159,7 @@ async def visual_creator_node(state: PipelineState) -> Dict[str, Any]:
         "visual_creator_output": visual_output,
         "visual_format_used": visual_output.primary_asset.visual_style,
         "stage": "visual_created",
-        "current_revision_target": None  # FIX: Clear revision target after processing
+        "current_revision_target": None
     }
 
 
@@ -12340,7 +12261,7 @@ async def reset_for_restart_node(state: PipelineState) -> Dict[str, Any]:
     """
     Reset state for a fresh topic restart after reject.
 
-    FIX: This node prevents infinite reject_restart loops by:
+    This node prevents infinite reject_restart loops by:
     1. Incrementing _reject_restart_count (checked by route_after_qc)
     2. Clearing topic-specific state (trend_topics, selected_topic, drafts)
     3. Resetting revision counters
@@ -12482,7 +12403,6 @@ def route_after_qc(state: PipelineState) -> str:
     revision_count = state.get("revision_count", 0)
     content_type = state.get("content_type")
 
-    # FIX: Return error route instead of raising exception
     # Raising exceptions in routing functions breaks fail-fast philosophy
     # because it's not routed through error_handler_node
     if not all([qc_output, qc_result, content_type]):
@@ -12493,14 +12413,11 @@ def route_after_qc(state: PipelineState) -> str:
         )
         return "handle_error"  # Route to error handler instead of raising
 
-    # FIX: Check reject_restart limit to prevent infinite loops
     # If we've already restarted twice with new topics and still failing,
     # escalate to manual review
     reject_restart_count = state.get("_reject_restart_count", 0)
-    # FIX: Use centralized config instead of hardcoded value
     max_reject_restarts = THRESHOLD_CONFIG.max_reject_restarts
 
-    # FIX: Use centralized config instead of local dict
     max_revisions = THRESHOLD_CONFIG.get_max_revisions(content_type)
 
     # ─────────────────────────────────────────────────────────────────
@@ -12517,7 +12434,6 @@ def route_after_qc(state: PipelineState) -> str:
     decision = THRESHOLD_CONFIG.get_decision(score, content_type)
 
     # ─────────────────────────────────────────────────────────────────
-    # FIX: Check "pass" BEFORE max_revisions!
     # If post finally passes on its last revision, it should still pass,
     # not be sent to manual review. Previous logic was inverted.
     # ─────────────────────────────────────────────────────────────────
@@ -12532,7 +12448,6 @@ def route_after_qc(state: PipelineState) -> str:
         return "max_revisions_force"
 
     elif decision == "reject":
-        # FIX: Check if we've hit the restart limit
         # Prevents infinite loop of reject -> scout -> reject -> scout...
         if reject_restart_count >= max_reject_restarts:
             import logging
@@ -12737,6 +12652,11 @@ def initialize_pipeline_state(
         revision_history=[],
         current_revision_target=None,
 
+        # Reject/Restart tracking
+        _reject_restart_count=0,
+        _rejected_topics=[],
+        _qc_decision=None,
+
         # Meta-Agent self-evaluation
         meta_evaluation=None,
         meta_evaluation_score=None,
@@ -12746,6 +12666,10 @@ def initialize_pipeline_state(
 
         final_content=None,
         human_approval_status=None,
+        # Human approval tracking
+        human_approval_requested_at=None,
+        human_approval_reminder_count=0,
+        human_approval_escalation_level=0,
 
         # Error tracking
         critical_error=None,
@@ -13122,7 +13046,7 @@ class PostPerformance:
 
     # Content metadata (from generation)
     content_type: ContentType
-    hook_style: HookStyle  # FIX: Use HookStyle enum for type safety
+    hook_style: HookStyle
     template_used: str
     visual_type: str
     has_author_photo: bool
@@ -13443,7 +13367,7 @@ class EnvCredentialProvider:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# FIX #2: LinkedIn API Error Types for Retry Logic
+# LinkedIn API Error Types for Retry Logic
 # ═══════════════════════════════════════════════════════════════════════════
 
 class LinkedInRateLimitError(Exception):
@@ -13561,7 +13485,7 @@ class LinkedInMetricsCollector:
         """
         Collect all metrics for a single post.
 
-        MEDIUM PRIORITY FIX #2: Added retry logic for API calls.
+        Added retry logic for API calls.
 
         NOTE: This is a synchronous function that uses time.sleep().
         When called from async context (e.g., _collect_and_store), wrap with:
@@ -13581,7 +13505,6 @@ class LinkedInMetricsCollector:
         """
         self.logger.debug(f"Collecting metrics for post: {post_urn}")
 
-        # FIX #2: Each API call wrapped with retry
         post = self._api_call_with_retry("get_post", post_urn)
         time.sleep(self.request_delay)
 
@@ -13608,7 +13531,7 @@ class LinkedInMetricsCollector:
 
         return PostMetricsSnapshot(
             post_id=post_urn,
-            timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
+            timestamp=utc_now(),
             minutes_since_publish=self._calc_minutes_since_publish(post),
             likes=likes_count,
             comments=comments_count,
@@ -13627,7 +13550,7 @@ class LinkedInMetricsCollector:
         """
         Execute LinkedIn API call with retry and error handling.
 
-        FIX #2: Unified retry logic for all API calls.
+        Unified retry logic for all API calls.
         """
         try:
             method = getattr(self.api, method_name)
@@ -13660,7 +13583,7 @@ class LinkedInMetricsCollector:
         """
         Publish a new LinkedIn post.
 
-        CRITICAL FIX: Added retry decorator - this is the most important operation,
+        Added retry decorator - this is the most important operation,
         losing content due to transient failures is unacceptable.
 
         Args:
@@ -13709,7 +13632,7 @@ class LinkedInMetricsCollector:
         Collect metrics at scheduled intervals.
         Called by scheduler/cron job.
 
-        FIX #27: No longer overwrites minutes_since_publish.
+        No longer overwrites minutes_since_publish.
         Uses scheduled_checkpoint field to preserve both actual timing and checkpoint label.
         """
         snapshots = []
@@ -13794,7 +13717,7 @@ class MetricsScheduler:
         """
         Schedule all metric collection jobs for a new post.
 
-        MEDIUM PRIORITY FIX #14: Added return type and error handling.
+        Added return type and error handling.
 
         Args:
             post_urn: LinkedIn post URN (e.g., 'urn:li:activity:7654321')
@@ -13823,7 +13746,6 @@ class MetricsScheduler:
             run_time = published_at + timedelta(minutes=minutes)
             job_id = f"{post_urn}_{minutes}min"
 
-            # FIX #14: Error handling for job scheduling
             try:
                 self.scheduler.add_job(
                     self._collect_and_store,
@@ -13840,7 +13762,6 @@ class MetricsScheduler:
                 logger.error(f"[METRICS] Failed to schedule job {job_id}: {e}")
                 failed_schedules.append((minutes, str(e)))
 
-        # FIX #14: Log summary
         if failed_schedules:
             logger.warning(
                 f"[METRICS] Partial scheduling: {len(job_ids)} jobs scheduled, "
@@ -13855,12 +13776,11 @@ class MetricsScheduler:
         """
         Collect metrics and store in database.
 
-        FIX #27: Preserves actual minutes_since_publish, uses scheduled_checkpoint.
-        FIX: Uses run_in_executor to avoid blocking event loop during API calls.
+        Preserves actual minutes_since_publish, uses scheduled_checkpoint.
+        Uses run_in_executor to avoid blocking event loop during API calls.
         """
         import asyncio
         loop = asyncio.get_event_loop()
-        # FIX: Run synchronous API calls in thread pool to avoid blocking
         snapshot = await loop.run_in_executor(
             None, self.collector.collect_post_metrics, post_urn
         )
@@ -13877,7 +13797,6 @@ class MetricsScheduler:
         await self.db.store_metrics_snapshot(asdict(snapshot))
 
         # Check for alerts
-        # FIX: Use scheduled_minutes, not undefined 'minutes' variable
         await self._check_alerts(snapshot, scheduled_minutes)
 
     async def _check_alerts(self, snapshot: PostMetricsSnapshot, minutes: int):
@@ -14164,7 +14083,7 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from enum import Enum
 import json
-import asyncio  # FIX-002: Required for asyncio.Lock() in ThreadSafeLearningEngine
+import asyncio
 
 
 class LearningType(Enum):
@@ -14216,13 +14135,12 @@ class MicroLearning:
     # Promotion tracking
     is_promoted_to_rule: bool = False       # High confidence → permanent rule
 
-    # FIX: Add temporal decay configuration
     # Decay rate per day (0.01 = 1% per day, ~30% after 30 days)
     CONFIDENCE_DECAY_RATE: float = 0.01
 
     def apply_temporal_decay(self) -> None:
         """
-        FIX: Apply time-based confidence decay.
+        Apply time-based confidence decay.
 
         Learnings that haven't been confirmed recently should lose confidence.
         This prevents stale learnings from permanently influencing prompts.
@@ -14234,7 +14152,7 @@ class MicroLearning:
         else:
             reference_time = self.last_confirmed_at
 
-        days_since_activity = (utc_now() - reference_time).days  # FIX-024: Use timezone-aware datetime
+        days_since_activity = (utc_now() - reference_time).days
 
         if days_since_activity > 0:
             # Exponential decay: confidence * (1 - rate)^days
@@ -14248,7 +14166,7 @@ class MicroLearning:
     def confirm(self):
         """Called when evidence supports this learning."""
         self.confirmations += 1
-        self.last_confirmed_at = utc_now()  # FIX-024: Use timezone-aware datetime
+        self.last_confirmed_at = utc_now()
         # Confidence grows logarithmically (diminishing returns)
         self.confidence = min(1.0, self.confidence + 0.1 * (1 - self.confidence))
 
@@ -14268,7 +14186,7 @@ class MicroLearning:
 
     def get_effective_confidence(self) -> float:
         """
-        FIX: Get confidence with temporal decay applied.
+        Get confidence with temporal decay applied.
 
         Use this instead of accessing self.confidence directly when
         making decisions based on learning reliability.
@@ -14348,11 +14266,10 @@ class ThreadSafeLearningEngine:
     @property
     def learnings(self) -> Dict[str, "MicroLearning"]:
         """
-        FIX-027b: Return copy of learnings dict to prevent external mutation.
+        Return copy of learnings dict to prevent external mutation.
         """
         return dict(self._engine.learnings)
 
-    # FIX-027: Add missing wrapper methods
     def get_learnings_for_prompt(
         self,
         component: str,
@@ -15204,14 +15121,13 @@ class GeneratedCode:
     # Generated tests
     test_code: Optional[str] = None
 
-    # FIX: Dependencies field was missing but used in code generation
     dependencies: List[str] = field(default_factory=list)
 
     def is_valid(self) -> bool:
         """
         Check if generated code is valid for loading.
 
-        FIX: type_check_passed is now optional (non-blocking).
+        type_check_passed is now optional (non-blocking).
         Type errors are logged as warnings but don't prevent loading.
         This allows code with minor type inconsistencies to still work.
         """
@@ -15510,19 +15426,21 @@ class CodeGenerationEngine:
                 check=True
             )
 
-    # FIX-010: Allowlist of trusted packages instead of regex validation
+    # These could be used to exfiltrate data from self-modifying code.
+    # If network access is needed, it must be explicitly enabled and sandboxed.
     ALLOWED_PACKAGES = frozenset({
-        "requests", "httpx", "aiohttp", "beautifulsoup4", "lxml",
+        "beautifulsoup4", "lxml",  # Parsing only (no network)
         "pandas", "numpy", "pydantic", "python-dateutil",
-        "tenacity", "structlog", "rich", "pillow", "anthropic",
-        "openai", "supabase", "pytz", "python-dotenv",
-        # Add more trusted packages as needed
+        "tenacity", "structlog", "rich", "pillow",
+        "pytz", "python-dotenv",
+        # NOTE: anthropic, openai, supabase removed - use injected clients instead
+        # Add more trusted NON-NETWORK packages as needed
     })
 
     def _is_safe_package_name(self, name: str) -> bool:
         """
         Validate package name using allowlist.
-        FIX-010: Regex validation is bypassable; use strict allowlist instead.
+        Validate package name using allowlist. Regex validation is bypassable; use strict allowlist instead.
         """
         import re
         # Extract base package name (before version specifier or extras)
@@ -15568,7 +15486,6 @@ class CodeValidator:
         generated.type_check_passed = await self._check_types(generated)
         if not generated.type_check_passed:
             logger.warning(f"[VALIDATE] Type check warnings for {generated.module_name}")
-            # FIX: Don't override result! Type check is non-blocking for is_valid(),
             # but we should preserve the actual result for tracking/debugging.
             # The is_valid() method should be updated to not require type_check_passed.
 
@@ -15787,7 +15704,7 @@ class CodeValidator:
     async def _test_import(self, generated: GeneratedCode) -> bool:
         """
         Test that the module can be imported.
-        FIX-009: Run import test in subprocess to prevent code execution in main process.
+        Run import test in subprocess to prevent code execution in main process.
         """
         try:
             with tempfile.TemporaryDirectory() as sandbox:
@@ -15795,7 +15712,6 @@ class CodeValidator:
                 module_path = sandbox_path / f"{generated.module_name}.py"
                 module_path.write_text(generated.code, encoding="utf-8")
 
-                # FIX-009: Test import in isolated subprocess instead of main process
                 test_script = f'''
 import sys
 sys.path.insert(0, r"{sandbox_path}")
@@ -15875,7 +15791,7 @@ class ModuleRegistry:
                 name=generated.module_name,
                 path=file_path,
                 capability_type=self._infer_capability_type(file_path),
-                loaded_at=utc_now(),  # FIX-024: Use timezone-aware datetime
+                loaded_at=utc_now(),
                 description=generated.description,
                 exports=self._extract_exports(generated.code)
             )
@@ -15906,7 +15822,7 @@ class ModuleRegistry:
             else:
                 registered.module_ref = await self._load_module(registered)
 
-            registered.loaded_at = utc_now()  # FIX-024: Use timezone-aware datetime
+            registered.loaded_at = utc_now()
             registered.version += 1
 
             logger.info(f"[REGISTRY] Reloaded module: {module_name} (v{registered.version})")
@@ -15917,7 +15833,7 @@ class ModuleRegistry:
         """
         Load a module from disk with sandbox isolation.
 
-        FIX: Added subprocess isolation and timeout to prevent:
+        Added subprocess isolation and timeout to prevent:
         1. Malicious top-level code execution in main process
         2. Infinite loops or resource exhaustion
         3. Unintended side effects during module loading
@@ -15986,10 +15902,6 @@ except Exception as e:
         previous_module = sys.modules.get(registered.name)
 
         try:
-            # FIX: Race condition - exec_module FIRST, then add to sys.modules
-            # Previously, module was added to sys.modules BEFORE exec_module,
-            # which could leave sys.modules in inconsistent state on failure.
-
             # Temporarily add to sys.modules (some modules need this during load)
             sys.modules[registered.name] = module
             spec.loader.exec_module(module)
@@ -16552,12 +16464,12 @@ class ResearchAgent:
             perplexity_client: Perplexity API client for web research
             linkedin_scraper: LinkedIn scraping client
             analytics_db: Database client for analytics
-            claude_client: Claude API client for LLM operations (FIX-005)
+            claude_client: Claude API client for LLM operations
         """
         self.perplexity = perplexity_client
         self.linkedin = linkedin_scraper
         self.db = analytics_db
-        self.claude = claude_client or get_claude()  # FIX-005: Was used but never initialized
+        self.claude = claude_client or get_claude()
 
         # Top LinkedIn influencers to learn from
         self.competitors = [
@@ -16572,7 +16484,7 @@ class ResearchAgent:
         """
         Check if research should be triggered.
 
-        MEDIUM PRIORITY FIX #13: Added comprehensive docstring.
+        Added comprehensive docstring.
 
         Evaluates multiple conditions to determine if research is needed:
 
@@ -16611,7 +16523,7 @@ class ResearchAgent:
             return ResearchTrigger.UNDERPERFORMANCE
 
         # Check for weekly cycle (Sunday)
-        now = utc_now()  # FIX-024: Use timezone-aware datetime
+        now = utc_now()
         if now.weekday() == 6:  # Sunday
             last_research = await self.db.get_last_research_date()
             if (now - last_research).days >= 7:
@@ -16622,12 +16534,12 @@ class ResearchAgent:
     async def research(
         self,
         trigger: ResearchTrigger,
-        timeout_seconds: int = 300  # FIX #9: Configurable timeout
+        timeout_seconds: int = 300
     ) -> ResearchReport:
         """
         Execute full research cycle.
 
-        MEDIUM PRIORITY FIX #9: Added timeout and error handling.
+        Added timeout and error handling.
         Research continues with partial results if some queries fail.
 
         Args:
@@ -16652,13 +16564,11 @@ class ResearchAgent:
             f"  Timeout: {timeout_seconds}s"
         )
 
-        # FIX #9: Wrap entire research in timeout
         try:
             async with asyncio.timeout(timeout_seconds):
                 for query in queries:
                     query_start = datetime.now()
 
-                    # FIX #9: Individual query error handling
                     try:
                         if query.source == "perplexity":
                             result = await self._research_perplexity(query)
@@ -16726,20 +16636,17 @@ class ResearchAgent:
         """
         Research using Perplexity API.
 
-        FIX: Added retry decorator and proper error handling.
         Uses search_max_attempts from RetryConfig (default: 2).
         """
         import logging
         logger = logging.getLogger("ResearchAgent")
 
-        # FIX: Wrap API call in try-except with proper error handling
         try:
             response = await self.perplexity.search(query.query)
         except Exception as e:
             logger.error(f"Perplexity search failed for query '{query.query[:50]}...': {e}")
             raise  # Let retry decorator handle it
 
-        # FIX: Validate response before using
         if not response or not hasattr(response, 'content') or not response.content:
             logger.warning(f"Empty response from Perplexity for query: {query.query[:50]}...")
             return []  # Return empty list instead of failing
@@ -16780,7 +16687,7 @@ class ResearchAgent:
         logger = logging.getLogger("ResearchAgent")
 
         all_posts = []
-        # FIX: Add rate limiting delay between LinkedIn API requests
+        # Rate limiting delay between LinkedIn API requests
         # LinkedIn rate limits are ~10 requests/minute, so 6-7 seconds between requests is safe
         REQUEST_DELAY_SECONDS = 7.0
 
@@ -16789,12 +16696,12 @@ class ResearchAgent:
                 posts = await self.linkedin.get_recent_posts(
                     profile_url=competitor_url,
                     limit=10,
-                    include_visuals=True  # FIX #18: Include visual metadata
+                    include_visuals=True
                 )
                 all_posts.extend(posts)
                 logger.debug(f"Fetched {len(posts)} posts from competitor {i+1}/{len(self.competitors)}")
 
-                # FIX: Rate limiting delay - skip delay after last request
+                # Rate limiting delay - skip delay after last request
                 if i < len(self.competitors) - 1:
                     await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
@@ -16826,7 +16733,6 @@ class ResearchAgent:
             response_model=List[ResearchFinding]
         )
 
-        # FIX #18: Analyze visual patterns separately
         visual_findings = await self._analyze_competitor_visuals(top_posts)
 
         return text_findings + visual_findings
@@ -16836,7 +16742,7 @@ class ResearchAgent:
         posts: List[dict]
     ) -> List[ResearchFinding]:
         """
-        FIX #18: Dedicated visual pattern analysis for competitor posts.
+        Dedicated visual pattern analysis for competitor posts.
         Extracts insights about what visual formats drive engagement.
         """
 
@@ -16907,7 +16813,6 @@ class ResearchAgent:
         top_10 = sorted_posts[:10]
         bottom_10 = sorted_posts[-10:]
 
-        # FIX #18: Enhanced visual data extraction
         def extract_post_data(p):
             return {
                 "hook": p.text[:100],
@@ -16952,7 +16857,6 @@ class ResearchAgent:
             response_model=List[ResearchFinding]
         )
 
-        # FIX #18: Additional visual-specific correlation analysis
         visual_correlation_findings = await self._analyze_visual_engagement_correlation(all_posts)
 
         return text_visual_findings + visual_correlation_findings
@@ -16962,7 +16866,7 @@ class ResearchAgent:
         posts: List[dict]
     ) -> List[ResearchFinding]:
         """
-        FIX #18: Deep correlation analysis between visual choices and engagement.
+        Deep correlation analysis between visual choices and engagement.
         Provides data-driven recommendations for Visual Creator Agent.
         """
 
@@ -17037,14 +16941,12 @@ class ResearchAgent:
         )
 
     # ═══════════════════════════════════════════════════════════════════════════
-    # FIX: Previously undefined helper methods, now implemented
+    # Helper methods
     # ═══════════════════════════════════════════════════════════════════════════
 
     def _build_queries(self, trigger: ResearchTrigger) -> List[ResearchQuery]:
         """
         Build research queries based on trigger type.
-
-        FIX: Previously called but never defined, causing AttributeError.
 
         Args:
             trigger: What triggered this research cycle
@@ -17123,8 +17025,6 @@ class ResearchAgent:
         """
         Get human-readable description of trigger reason.
 
-        FIX: Previously called but never defined.
-
         Args:
             trigger: Research trigger type
 
@@ -17146,8 +17046,6 @@ class ResearchAgent:
     def _calculate_confidence(self, findings: List[ResearchFinding]) -> float:
         """
         Calculate overall confidence score from research findings.
-
-        FIX: Previously called but never defined.
 
         Args:
             findings: List of research findings
@@ -17194,7 +17092,7 @@ class ResearchAgent:
             return []
 
         findings_text = "\n".join([
-            f"- [{f.source}] {f.finding} (confidence: {f.confidence:.2f})"  # FIX-006: field is 'finding', not 'description'
+            f"- [{f.source}] {f.finding} (confidence: {f.confidence:.2f})"
             for f in findings
         ])
 
@@ -17457,7 +17355,7 @@ class SystemSnapshot:
     Snapshot of system state before a modification.
     Used for rollback if modification causes degradation.
 
-    FIX: Added database_state for Supabase table snapshots.
+    Added database_state for Supabase table snapshots.
     Previously only files were backed up, leaving database in inconsistent
     state after rollback.
     """
@@ -17471,7 +17369,6 @@ class SystemSnapshot:
     configs: Dict[str, Any]         # path -> parsed json (before change)
     generated_modules: List[str]    # list of file paths (before change)
 
-    # FIX: DATABASE STATE (new)
     # Snapshots of Supabase tables affected by self-modification
     database_state: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
     # Format: {"learnings": [...rows...], "code_modifications": [...rows...]}
@@ -17494,7 +17391,7 @@ class RollbackManager:
     """
     Manages snapshots and rollback for Meta-Agent self-modifications.
 
-    MEDIUM PRIORITY FIX #11: Added comprehensive logging for all operations.
+    Added comprehensive logging for all operations.
 
     SAFETY FEATURES:
     1. Auto-snapshot before any modification
@@ -17530,14 +17427,13 @@ class RollbackManager:
         Create a snapshot before making changes.
         Returns snapshot_id for later rollback if needed.
 
-        FIX: Now async to support database state export.
+        Now async to support database state export.
         """
         import uuid
 
         snapshot_id = f"snap_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}"
         snapshot_path = self.snapshot_dir / snapshot_id
 
-        # FIX #11: Log snapshot creation start
         self.logger.info(
             f"[ROLLBACK] Creating snapshot: {snapshot_id}\n"
             f"  Trigger: {trigger}\n"
@@ -17579,19 +17475,18 @@ class RollbackManager:
             else:
                 self.logger.debug(f"[ROLLBACK] Skipping non-existent: {file_path}")
 
-        # FIX: Export database state for complete rollback
         database_state = await self._export_database_state()
 
         # Save metadata
         snapshot = SystemSnapshot(
             id=snapshot_id,
-            created_at=utc_now(),  # FIX-024: Use timezone-aware datetime
+            created_at=utc_now(),
             trigger=trigger,
             description=description,
             prompts=prompts,
             configs=configs,
             generated_modules=generated,
-            database_state=database_state,  # FIX: Include DB state
+            database_state=database_state,
             performance_baseline=performance_metrics,
             change_type=self._infer_change_type(files_to_backup)
         )
@@ -17599,12 +17494,11 @@ class RollbackManager:
         metadata_path = snapshot_path / "metadata.json"
         metadata_path.write_text(json.dumps(snapshot.__dict__, default=str, indent=2))
 
-        # FIX: Save database state separately (can be large)
+        # Save database state separately (can be large)
         if database_state:
             db_state_path = snapshot_path / "database_state.json"
             db_state_path.write_text(json.dumps(database_state, default=str, indent=2))
 
-        # FIX #11: Log snapshot creation summary
         self.logger.info(
             f"[ROLLBACK] Snapshot created: {snapshot_id}\n"
             f"  Prompts backed up: {len(prompts)}\n"
@@ -17619,7 +17513,7 @@ class RollbackManager:
 
     async def _export_database_state(self) -> Dict[str, List[Dict[str, Any]]]:
         """
-        FIX: Export relevant Supabase tables for complete rollback capability.
+        Export relevant Supabase tables for complete rollback capability.
 
         Only exports tables that are modified by self-improvement:
         - learnings: Micro-learnings from iterations
@@ -17643,7 +17537,7 @@ class RollbackManager:
 
             # Export recent code modifications (last 30 days)
             from datetime import timedelta
-            cutoff = (utc_now() - timedelta(days=30)).isoformat()  # FIX-024: Use timezone-aware datetime
+            cutoff = (utc_now() - timedelta(days=30)).isoformat()
             modifications = await db.client.table("code_modifications").select("*").gte("created_at", cutoff).execute()
             state["code_modifications"] = modifications.data if modifications.data else []
 
@@ -17666,7 +17560,7 @@ class RollbackManager:
 
     async def _restore_database_state(self, database_state: Dict[str, List[Dict[str, Any]]]) -> bool:
         """
-        FIX: Restore database tables from snapshot.
+        Restore database tables from snapshot.
 
         CAUTION: This is destructive! Only call during actual rollback.
         Uses upsert with on_conflict to handle existing rows.
@@ -17715,9 +17609,8 @@ class RollbackManager:
         """
         Restore system to a previous snapshot state.
 
-        FIX: Now async and includes database state restoration.
+        Now async and includes database state restoration.
         """
-        # FIX #11: Log rollback start
         self.logger.warning(f"[ROLLBACK] INITIATING ROLLBACK to snapshot: {snapshot_id}")
 
         snapshot_path = self.snapshot_dir / snapshot_id
@@ -17746,7 +17639,7 @@ class RollbackManager:
 
             self.logger.info(f"[ROLLBACK] Restored {len(files_restored)} files")
 
-            # STEP 2: FIX - Restore database state
+            # STEP 2: Restore database state
             db_state_path = snapshot_path / "database_state.json"
             if db_state_path.exists():
                 database_state = json.loads(db_state_path.read_text())
@@ -17783,11 +17676,10 @@ class RollbackManager:
         """
         Automatically rollback if performance metrics degraded.
 
-        FIX: Now async to support database restoration.
+        Now async to support database restoration.
 
         Returns RollbackResult if rollback was performed, None otherwise.
         """
-        # FIX #11: Log performance check
         self.logger.info(
             f"[ROLLBACK] Checking performance degradation for snapshot: {snapshot_id}\n"
             f"  Current metrics: {current_metrics}\n"
@@ -17818,7 +17710,6 @@ class RollbackManager:
                         f"(threshold: {degradation_threshold:.1%})"
                     )
 
-        # FIX #11: Log comparison results
         self.logger.debug(f"[ROLLBACK] Performance comparison:\n  " + "\n  ".join(degradation_details))
 
         if degraded:
@@ -17827,7 +17718,7 @@ class RollbackManager:
                 f"[ROLLBACK] AUTO-ROLLBACK TRIGGERED! "
                 f"Consecutive failures: {self.consecutive_failures}/{self.MAX_CONSECUTIVE_FAILURES}"
             )
-            result = await self.rollback_to(snapshot_id)  # FIX: await async method
+            result = await self.rollback_to(snapshot_id)
             result.error = f"Performance degraded beyond {degradation_threshold*100}% threshold"
             return result
 
@@ -17842,7 +17733,6 @@ class RollbackManager:
         """
         should_pause = self.consecutive_failures >= self.MAX_CONSECUTIVE_FAILURES
 
-        # FIX #11: Log circuit breaker status
         if should_pause:
             self.logger.critical(
                 f"[ROLLBACK] CIRCUIT BREAKER ACTIVE! "
@@ -17886,7 +17776,7 @@ class CriticAgent:
     Это создаёт "внутренний диалог" для улучшения качества.
 
     ═══════════════════════════════════════════════════════════════════════════
-    FIX: RESPONSIBILITY SEPARATION (QC Agent vs Critic Agent)
+    RESPONSIBILITY SEPARATION (QC Agent vs Critic Agent)
     ═══════════════════════════════════════════════════════════════════════════
 
     QC Agent (Quality Control):
@@ -17943,6 +17833,15 @@ class CriticAgent:
     def __init__(self, claude_client):
         self.claude = claude_client
         self.conversation_history = []
+        self._session_counter = 0
+
+    def _generate_session_id(self) -> str:
+        """Generate a unique session ID for this critique dialogue."""
+        import uuid
+        self._session_counter += 1
+        timestamp = utc_now().strftime("%Y%m%d_%H%M%S")
+        unique_part = uuid.uuid4().hex[:8]
+        return f"critique_{timestamp}_{self._session_counter}_{unique_part}"
 
     async def critique(self, content: str, context: dict) -> CritiqueResponse:
         """
@@ -18704,14 +18603,13 @@ class CodeEvolutionEngine:
         """
         Generate a new Python module based on learnings.
 
-        MEDIUM PRIORITY FIX #6: Added comprehensive logging for debugging
+        Added comprehensive logging for debugging
         self-modification issues and tracking code generation.
         """
         import logging
         import hashlib
         logger = logging.getLogger("CodeEvolutionEngine")
 
-        # FIX #6: Log generation attempt with context
         knowledge_hash = hashlib.sha256(json.dumps(knowledge, sort_keys=True).encode()).hexdigest()[:12]
         generation_id = f"gen_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{knowledge_hash}"
 
@@ -18751,19 +18649,16 @@ class CodeEvolutionEngine:
         )
         generation_duration = (datetime.now() - start_time).total_seconds()
 
-        # FIX #6: Log generation completion
         logger.info(f"[CODE_GEN] LLM generation completed in {generation_duration:.1f}s for {generation_id}")
 
         # Extract code from response
         code = self._extract_code(code)
 
-        # FIX #6: Log code stats
         code_lines = len(code.split('\n'))
         logger.debug(f"[CODE_GEN] Extracted code: {code_lines} lines for {generation_id}")
 
         # Validate syntax
         if not self._validate_syntax(code):
-            # FIX #6: Log invalid code for debugging (to separate file)
             invalid_code_path = self.generated_dir / f"_invalid_{generation_id}.py.failed"
             invalid_code_path.write_text(code)
             logger.error(
@@ -18776,7 +18671,6 @@ class CodeEvolutionEngine:
         module_name = self._generate_module_name(purpose)
         module_path = self.generated_dir / f"{module_name}.py"
 
-        # FIX #6: Log successful generation
         logger.info(
             f"[CODE_GEN] SUCCESS: {generation_id}\n"
             f"  Module: {module_name}\n"
@@ -18790,7 +18684,7 @@ class CodeEvolutionEngine:
             path=module_path,
             code=code,
             purpose=purpose,
-            generated_at=utc_now(),  # FIX-024: Use timezone-aware datetime
+            generated_at=utc_now(),
             knowledge_source=knowledge,
             validated=True
         )
@@ -18847,7 +18741,7 @@ class CodeEvolutionEngine:
             version=version,
             changes_made=reflection.prompt_changes,
             knowledge_source=knowledge,
-            evolved_at=utc_now()  # FIX-024: Use timezone-aware datetime
+            evolved_at=utc_now()
         )
 
     def _validate_syntax(self, code: str) -> bool:
@@ -18868,6 +18762,72 @@ class CodeEvolutionEngine:
         else:
             code = response
         return code.strip()
+
+    def _generate_module_name(self, purpose: str) -> str:
+        """
+        Generate a valid Python module name from purpose description.
+
+        Args:
+            purpose: Description of what the module does
+
+        Returns:
+            A valid, unique Python module name
+        """
+        import re
+        import hashlib
+
+        # Clean the purpose string to create base name
+        # Remove special chars, lowercase, replace spaces with underscores
+        clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', purpose.lower())
+        clean_name = re.sub(r'\s+', '_', clean_name.strip())
+
+        # Truncate if too long
+        if len(clean_name) > 40:
+            clean_name = clean_name[:40]
+
+        # Add hash suffix for uniqueness
+        hash_suffix = hashlib.md5(f"{purpose}_{utc_now().isoformat()}".encode()).hexdigest()[:6]
+
+        # Ensure valid Python identifier (can't start with number)
+        if clean_name[0].isdigit():
+            clean_name = f"mod_{clean_name}"
+
+        return f"{clean_name}_{hash_suffix}"
+
+    def _get_next_version(self, prompt_path: str) -> str:
+        """
+        Get the next version number for a prompt file.
+
+        Args:
+            prompt_path: Path to the current prompt file
+
+        Returns:
+            Next version string (e.g., "v2", "v3", etc.)
+        """
+        import re
+
+        prompt_file = Path(prompt_path)
+        prompt_dir = prompt_file.parent
+        prompt_stem = prompt_file.stem  # filename without extension
+
+        # Find existing versions of this prompt
+        existing_versions = []
+        for f in prompt_dir.glob(f"{prompt_stem}_v*.txt"):
+            match = re.search(r'_v(\d+)\.txt$', f.name)
+            if match:
+                existing_versions.append(int(match.group(1)))
+
+        # Also check if the base file exists (it's v1)
+        if prompt_file.exists():
+            existing_versions.append(1)
+
+        # Get next version
+        if existing_versions:
+            next_version = max(existing_versions) + 1
+        else:
+            next_version = 1
+
+        return f"v{next_version}"
 
 
 @dataclass
@@ -18968,6 +18928,49 @@ class KnowledgeBase:
 
         return [l["content"] for l in learnings if l["confidence"] > 0.7]
 
+    async def _generate_embedding(self, text: str) -> List[float]:
+        """
+        Generate embedding vector for text using the configured embedding model.
+
+        This method generates embeddings for semantic search in the knowledge base.
+        Uses the vector_store's embedding capability or falls back to a simple hash-based
+        approach if no embedding model is configured.
+
+        Args:
+            text: The text to generate an embedding for
+
+        Returns:
+            List of floats representing the embedding vector
+        """
+        # Check if vector_store has its own embedding method
+        if hasattr(self.vector_store, 'generate_embedding'):
+            return await self.vector_store.generate_embedding(text)
+
+        # Check if vector_store has an encoder
+        if hasattr(self.vector_store, 'encoder'):
+            return self.vector_store.encoder.encode(text).tolist()
+
+        # Fallback: Use a simple hash-based pseudo-embedding
+        # This is NOT semantically meaningful but allows the code to run
+        # In production, use a real embedding model (OpenAI, Sentence Transformers, etc.)
+        import hashlib
+        import struct
+
+        # Generate a deterministic pseudo-embedding from text hash
+        text_hash = hashlib.sha256(text.encode('utf-8')).digest()
+        # Convert to 128 floats (512 bytes / 4 bytes per float)
+        embedding_dim = 128
+        floats = []
+        for i in range(embedding_dim):
+            # Use modular arithmetic to generate more floats from hash
+            idx = (i * 4) % len(text_hash)
+            byte_slice = text_hash[idx:idx+4] if idx + 4 <= len(text_hash) else (text_hash[idx:] + text_hash[:4 - (len(text_hash) - idx)])
+            # Normalize to [-1, 1] range
+            val = struct.unpack('>I', byte_slice)[0] / (2**32) * 2 - 1
+            floats.append(val)
+
+        return floats
+
 
 @dataclass
 class Learning:
@@ -18995,7 +18998,7 @@ class DeepImprovementLoop:
     def __init__(
         self,
         creator: WriterAgent,
-        critic: "SingleCallEvaluator",  # FIX: Was CriticAgent, now SingleCallEvaluator
+        critic: "SingleCallEvaluator",
         reflector: ReflectionEngine,
         researcher: ResearchAgent,
         code_evolver: CodeEvolutionEngine,
@@ -19050,7 +19053,7 @@ class DeepImprovementLoop:
 
         # Step 4: Store learnings
         for topic, content in knowledge.items():
-            now = utc_now()  # FIX-024: Use timezone-aware datetime
+            now = utc_now()
             await self.kb.store_learning(Learning(
                 id=f"learning_{now.timestamp()}",
                 topic=topic,
@@ -19203,7 +19206,7 @@ class SelfModificationEngine:
                 continue
 
             record = ModificationRecord(
-                timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
+                timestamp=utc_now(),
                 component=component,
                 parameter=modification["parameter"],
                 old_value=modification["old_value"],
@@ -19259,7 +19262,7 @@ class SelfModificationEngine:
 
         # Restore old value
         await self._apply_modification(ModificationRecord(
-            timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
+            timestamp=utc_now(),
             component=record.component,
             parameter=record.parameter,
             old_value=record.new_value,  # Swap
@@ -19386,7 +19389,7 @@ class ExperimentationEngine:
 
         experiment = await self.db.get_experiment(experiment_id)
         experiment.status = ExperimentStatus.RUNNING
-        experiment.started_at = utc_now()  # FIX-024: Use timezone-aware datetime
+        experiment.started_at = utc_now()
 
         self.current_experiment = experiment
         await self.db.update_experiment(experiment)
@@ -19431,7 +19434,7 @@ class ExperimentationEngine:
         """
         Check if experiment has enough data to conclude.
 
-        FIX: Uses proper statistical testing (Welch's t-test) instead of
+        Uses proper statistical testing (Welch's t-test) instead of
         naive ratio comparison. This ensures we don't conclude experiments
         prematurely due to random variance.
         """
@@ -19455,8 +19458,7 @@ class ExperimentationEngine:
         if len(control_scores) < 3 or len(treatment_scores) < 3:
             return  # Need at least 3 samples for meaningful statistics
 
-        # FIX: Perform Welch's t-test (doesn't assume equal variances)
-        # This is more robust than simple ratio comparison
+        # Perform Welch's t-test (doesn't assume equal variances)
         t_statistic, p_value = stats.ttest_ind(
             treatment_scores,
             control_scores,
@@ -19532,10 +19534,9 @@ class ExperimentationEngine:
         control = exp.variants[0]
         treatment = exp.variants[1]
 
-        # FIX: Use statistical results computed in _check_completion
         stats_results = getattr(exp, 'statistical_results', None)
 
-        # FIX: Determine winner based on statistical significance, not just raw average
+        # Determine winner based on statistical significance
         if stats_results and stats_results.get('p_value', 1.0) < 0.05:
             # Statistically significant result
             effect_size = stats_results.get('effect_size', 0)
@@ -19543,13 +19544,12 @@ class ExperimentationEngine:
                 exp.winner = "treatment"
             else:
                 exp.winner = "control"
-            # FIX: Calculate lift correctly, handling zero baseline
+            # Calculate lift, handling zero baseline
             if control.avg_score > 0:
                 exp.lift = ((treatment.avg_score - control.avg_score) / control.avg_score) * 100
             else:
                 exp.lift = 0  # Cannot calculate lift with zero baseline
 
-            # FIX: Use actual confidence from statistical test (1 - p_value)
             exp.confidence = 1.0 - stats_results.get('p_value', 0.05)
         else:
             # Not statistically significant - inconclusive
@@ -19561,9 +19561,9 @@ class ExperimentationEngine:
             )
 
         exp.status = ExperimentStatus.STOPPED_EARLY if early_stop else ExperimentStatus.COMPLETED
-        exp.completed_at = utc_now()  # FIX-024: Use timezone-aware datetime
+        exp.completed_at = utc_now()
 
-        # FIX: Only apply winner if statistically significant AND treatment won
+        # Apply winner if statistically significant AND treatment won
         if exp.winner == "treatment" and exp.confidence >= 0.95:
             await self.modification_engine.apply_recommendations([{
                 "component": list(treatment.config_override.keys())[0].split(".")[0],
@@ -19648,7 +19648,6 @@ class MetaAgent:
 
         result = await self.evaluator.evaluate(draft, context)
 
-        # FIX: Use centralized thresholds instead of hardcoded values
         content_type = context.get("content_type", ContentType.COMMUNITY_CONTENT)
         pass_threshold = THRESHOLD_CONFIG.get_pass_threshold(content_type)
         max_iterations = THRESHOLD_CONFIG.get_max_meta_iterations()
@@ -19936,7 +19935,7 @@ class AutonomyConfig:
     degradation_duration_hours: int = 24
 
     def __post_init__(self):
-        """FIX-021: Validate configuration values."""
+        """Validate configuration values."""
         if not 0.0 <= self.auto_publish_threshold <= 10.0:
             raise ValidationError(
                 f"auto_publish_threshold must be 0-10, got {self.auto_publish_threshold}"
@@ -19991,7 +19990,7 @@ class AutonomyManager:
         content_type: Optional[ContentType] = None
     ) -> AutonomyLevel:
         """
-        FIX-004: Internal version without lock - caller must hold lock.
+        Internal version without lock - caller must hold lock.
         Used by get_status() to avoid deadlock.
         """
         # Check temporary elevation first
@@ -20080,8 +20079,7 @@ class AutonomyManager:
         if level == AutonomyLevel.AUTO_HIGH_SCORE:
             if action == "post" and score is not None:
                 return score < self._config.auto_publish_threshold
-            # FIX: At level 3, non-post actions (modification, research) still need approval
-            # Only high-score posts are auto-approved, everything else needs human review
+            # At level 3, non-post actions (modification, research) still need approval
             return action in ["modification", "research"]
 
         # Level 4: Nothing needs approval
@@ -20101,7 +20099,7 @@ class AutonomyManager:
         - Testing mode (Level 1 during debugging)
         """
         async with self._lock:
-            until = utc_now() + timedelta(hours=hours)  # FIX-024: Use timezone-aware datetime
+            until = utc_now() + timedelta(hours=hours)
             self._temporary_elevation = (level, until)
 
     async def clear_temporary_elevation(self) -> None:
@@ -20126,7 +20124,7 @@ class AutonomyManager:
 
             if self._consecutive_failures >= self._config.consecutive_failures_threshold:
                 # Trigger degradation
-                self._degradation_until = utc_now() + timedelta(  # FIX-024: Use timezone-aware datetime
+                self._degradation_until = utc_now() + timedelta(
                     hours=self._config.degradation_duration_hours
                 )
                 self._consecutive_failures = 0  # Reset counter
@@ -20147,7 +20145,6 @@ class AutonomyManager:
     async def get_status(self) -> Dict:
         """Get current autonomy status for monitoring/debugging."""
         async with self._lock:
-            # FIX-004: Use internal non-locking version to avoid deadlock
             effective_level = self._get_effective_level_unlocked()
 
             status = {
@@ -20175,7 +20172,7 @@ class AutonomyManager:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GLOBAL AUTONOMY MANAGER INSTANCE
-# FIX-015: Thread-safe async initialization with double-check locking
+# Thread-safe async initialization with double-check locking
 # ═══════════════════════════════════════════════════════════════════════════
 
 _autonomy_manager: Optional[AutonomyManager] = None
@@ -20184,7 +20181,7 @@ _autonomy_manager_lock: Optional[asyncio.Lock] = None
 async def get_autonomy_manager() -> AutonomyManager:
     """
     Get the global autonomy manager instance.
-    FIX-015: Thread-safe async initialization with double-check locking.
+    Thread-safe async initialization with double-check locking.
     """
     global _autonomy_manager, _autonomy_manager_lock
 
@@ -20247,24 +20244,21 @@ class ApprovalTimeoutConfig:
     auto_resolve_min_score: float = 8.0     # Only auto-approve if score >= this
 
     def __post_init__(self):
-        """FIX-022: Comprehensive validation."""
+        """Comprehensive validation."""
         if self.escalation_contacts is None:
             self.escalation_contacts = []
 
-        # FIX-022: Validate auto_resolve_action
         valid_actions = {"approve", "reject", "hold"}
         if self.auto_resolve_action not in valid_actions:
             raise ValidationError(
                 f"auto_resolve_action must be one of {valid_actions}, got '{self.auto_resolve_action}'"
             )
 
-        # FIX-022: Validate timing constraints
         if not (self.reminder_after_hours < self.escalate_after_hours < self.auto_resolve_after_hours):
             raise ValidationError(
                 "Must have: reminder_after < escalate_after < auto_resolve_after"
             )
 
-        # FIX-022: Validate score range
         if not 0.0 <= self.auto_resolve_min_score <= 10.0:
             raise ValidationError(
                 f"auto_resolve_min_score must be 0-10, got {self.auto_resolve_min_score}"
@@ -20381,7 +20375,7 @@ class ApprovalTimeoutManager:
         result = await self._db.client.table("pending_approvals").select("*").eq("status", "pending").execute()
 
         pending = result.data or []
-        now = utc_now()  # FIX-024: Use timezone-aware datetime
+        now = utc_now()
 
         for approval in pending:
             requested_at = datetime.fromisoformat(approval["requested_at"])
@@ -20505,7 +20499,7 @@ class ApprovalTimeoutManager:
         result = await self._db.client.table("pending_approvals").select("*").eq("status", "pending").execute()
 
         pending = result.data or []
-        now = utc_now()  # FIX-024: Use timezone-aware datetime
+        now = utc_now()
 
         total = len(pending)
         urgent = 0  # Pending > 24h
@@ -20851,7 +20845,7 @@ class LogLevel(Enum):
     """
     Log levels with numeric values for proper severity comparison.
 
-    FIX: Changed from string values to integers.
+    Changed from string values to integers.
     String comparison doesn't work for severity ("debug" > "critical" = True lexicographically).
     """
     DEBUG = 10       # Detailed debugging info
@@ -20887,7 +20881,7 @@ class LogComponent(Enum):
     ANALYTICS = "analytics"
     TELEGRAM = "telegram"
 
-    # Additional components (FIX: missing from original list)
+    # Additional components
     CIRCUIT_BREAKER = "circuit_breaker"
     PIPELINE_RECOVERY = "pipeline_recovery"
     CODE_GENERATION = "code_generation"
@@ -21032,7 +21026,7 @@ class AgentLogger:
         """Log a message."""
 
         entry = LogEntry(
-            timestamp=utc_now(),  # FIX-024: Use timezone-aware datetime
+            timestamp=utc_now(),
             level=level,
             component=component,
             message=message,
@@ -21073,7 +21067,7 @@ class AgentLogger:
         """
         Write log entry to file using async I/O.
 
-        FIX: Changed from sync open() to aiofiles for proper async file I/O.
+        Changed from sync open() to aiofiles for proper async file I/O.
         Sync file operations block the event loop.
         """
         json_line = entry.to_json() + "\n"
@@ -21403,7 +21397,7 @@ class TelegramLogViewer:
 
         start_time = None
         if args and args[0] == "24h":
-            start_time = utc_now() - timedelta(hours=24)  # FIX-024: Use timezone-aware datetime
+            start_time = utc_now() - timedelta(hours=24)
 
         logs = await self.logger.query_logs(
             level=LogLevel.ERROR,
@@ -21552,7 +21546,7 @@ class PipelineRunLogger:
 ### Daily Log Digest
 
 ```python
-from datetime import datetime, timedelta, timezone  # FIX-003: Required for timedelta and timezone-aware datetime
+from datetime import datetime, timedelta, timezone
 
 
 class DailyDigest:
@@ -21568,7 +21562,7 @@ class DailyDigest:
     async def generate_digest(self) -> str:
         """Generate daily digest."""
 
-        yesterday = utc_now() - timedelta(days=1)  # FIX-024: Use timezone-aware datetime
+        yesterday = utc_now() - timedelta(days=1)
 
         # Query logs from last 24h
         all_logs = await self.logger.query_logs(
@@ -21777,7 +21771,7 @@ class ModificationSafetySystem:
 
     def _validate_modification_request(self, mod: "ModificationRequest") -> None:
         """
-        FIX-007: Validate a ModificationRequest before processing.
+        Validate a ModificationRequest before processing.
         Moved inside class as instance method.
 
         Raises:
@@ -21805,15 +21799,14 @@ class ModificationSafetySystem:
         Process modification request based on risk level.
         Returns: "applied", "pending_approval", "scheduled_for_review"
 
-        FIX: Added input validation to prevent:
+        Added input validation to prevent:
         - Risk level spoofing (client claiming LOW risk for HIGH risk modification)
         - Invalid modification types
         - Missing required fields
         """
-        # FIX: Validate modification request
         self._validate_modification_request(mod)
 
-        # FIX: Verify risk level matches classification (prevent spoofing)
+        # Verify risk level matches classification (prevent spoofing)
         expected_risk = modification_risk_classification.get(mod.modification_type)
         if expected_risk and expected_risk != mod.risk_level:
             raise SecurityError(
@@ -21877,7 +21870,6 @@ class ModificationSafetySystem:
                 limit=trigger.window_posts
             )
 
-            # FIX: Prevent division by zero
             if not recent_metrics:
                 logger.warning(
                     f"[ROLLBACK_CHECK] No recent metrics for {mod.modification_type}, skipping"
@@ -21941,8 +21933,7 @@ class ModificationSafetySystem:
 
     def _get_config_path(self, component: str) -> str:
         """
-        FIX-008: Get the configuration file path for a component.
-        Previously called but never defined, causing AttributeError.
+        Get the configuration file path for a component.
 
         Args:
             component: Component name (e.g., "writer", "qc", "humanizer")
@@ -21977,7 +21968,7 @@ class ModificationSafetySystem:
         """
         Apply state to a component.
 
-        MEDIUM PRIORITY FIX #7: Added error handling, backup, and logging
+        Added error handling, backup, and logging
         for critical configuration changes.
         """
         import logging
@@ -21991,7 +21982,7 @@ class ModificationSafetySystem:
 
         logger.info(f"[STATE_APPLY] Applying state to {component}: {list(state.keys())}")
 
-        # FIX #7: Create backup before modification
+        # Create backup before modification
         try:
             if os.path.exists(config_path):
                 shutil.copy2(config_path, backup_path)
@@ -22000,7 +21991,6 @@ class ModificationSafetySystem:
             logger.error(f"[STATE_APPLY] Failed to create backup for {component}: {e}")
             raise ConfigurationBackupError(f"Cannot backup {config_path}: {e}")
 
-        # FIX #7: Read with error handling
         try:
             with open(config_path, 'r', encoding='utf-8') as f:
                 current_config = json.load(f)
@@ -22021,7 +22011,7 @@ class ModificationSafetySystem:
             current_config[key] = value
             changes_made.append(f"{key}: {old_value} → {value}")
 
-        # FIX #7: Write with error handling and atomic write pattern
+        # Write with atomic write pattern
         try:
             # Write to temp file first, then rename (atomic on most systems)
             temp_path = f"{config_path}.tmp"
@@ -22047,17 +22037,14 @@ class ModificationSafetySystem:
             raise ConfigurationWriteError(f"Cannot write {config_path}: {e}")
 
 
-# FIX: Security exception for validation failures
 class SecurityError(Exception):
     """Raised when a security validation fails (e.g., risk level spoofing)."""
     pass
 
 
-# FIX-007: This function is now a method inside ModificationSafetySystem class
-# See class definition at line ~21492 for the method _validate_modification_request(self, mod)
+# This function is now a method inside ModificationSafetySystem class
 
 
-# FIX #7: Custom exceptions for configuration operations
 class ConfigurationBackupError(Exception):
     """Raised when configuration backup fails."""
     pass
@@ -22075,16 +22062,11 @@ class ConfigurationWriteError(Exception):
     pass
 
 
-# FIX-008: This method belongs to ModificationSafetySystem class
-# It should be added as a method inside the class definition above
-# Here's the standalone helper version for reference:
 def get_config_path(component: str) -> str:
     """
     Get config file path for component.
 
-    FIX-008: Removed path traversal vulnerability by using whitelist-only approach.
-    Previously returned f"config/{component}_config.json" for unknown components,
-    allowing path traversal attacks like component="../../etc/passwd".
+    Uses whitelist-only approach for security (prevents path traversal).
     """
     paths = {
         "writer": "config/writer_config.json",
@@ -22095,7 +22077,6 @@ def get_config_path(component: str) -> str:
         "humanizer": "config/humanizer_config.json",
         "analyzer": "config/analyzer_config.json",
     }
-    # FIX-008: Security - whitelist only, no dynamic path construction
     if component not in paths:
         raise ValueError(
             f"Unknown component: {component}. "
@@ -22323,7 +22304,7 @@ class SingleCallEvaluator:
 
     def __init__(self, claude_client, threshold_config: "ThresholdConfig" = None):
         """
-        FIX-018: Inject ThresholdConfig for centralized threshold management.
+        Inject ThresholdConfig for centralized threshold management.
         """
         self.claude = claude_client
         self.rubric = evaluation_rubric
@@ -22352,10 +22333,10 @@ class SingleCallEvaluator:
         # Calculate weighted total
         response.weighted_total = self._calculate_weighted_total(response.scores)
 
-        # FIX-018: Use centralized threshold with content-type multiplier
+        # Use centralized threshold with content-type multiplier
         pass_threshold = self.threshold_config.get_pass_threshold(content_type)
         response.passes_threshold = response.weighted_total >= pass_threshold
-        response.threshold_used = pass_threshold  # FIX-018b: Record which threshold was used
+        response.threshold_used = pass_threshold
 
         # If doesn't pass, generate revision recommendations
         if not response.passes_threshold:
@@ -22416,14 +22397,13 @@ class SingleCallEvaluator:
 class QCAgent:
     """
     Quality Control Agent using single-call evaluation.
-
-    FIX #21: Now evaluates BOTH post content AND visual asset together.
+    Evaluates BOTH post content AND visual asset together.
     """
 
     def __init__(
         self,
         evaluator: SingleCallEvaluator,
-        visual_evaluator: "VisualQualityEvaluator"  # FIX #21
+        visual_evaluator: "VisualQualityEvaluator"
     ):
         self.evaluator = evaluator
         self.visual_evaluator = visual_evaluator
@@ -22431,14 +22411,14 @@ class QCAgent:
     async def evaluate_post(
         self,
         post: HumanizedPost,
-        visual: VisualAsset,  # FIX #21: Now required
+        visual: VisualAsset,
         max_revisions: int = 3
     ) -> QCResult:
         """
         Evaluate BOTH post text quality AND visual quality.
         Returns decision: pass/revise/reject.
 
-        FIX #21: Visual quality is now part of the evaluation pipeline.
+        Visual quality is part of the evaluation pipeline.
         """
 
         # Evaluate text content
@@ -22447,7 +22427,6 @@ class QCAgent:
             content_type=post.content_type
         )
 
-        # FIX #21: Evaluate visual quality
         visual_evaluation = await self.visual_evaluator.evaluate(
             visual=visual,
             post_content=post.humanized_text,
@@ -22460,8 +22439,6 @@ class QCAgent:
             visual_evaluation.score * 0.25
         )
 
-        # FIX: Use combined_score for pass/fail decision
-        # Previously calculated combined_score but ignored it in passes check
         visual_minimum = 6.0  # Visual can't be below 6 even if text is great
         combined_threshold = 8.0  # Use centralized threshold
         passes = (
@@ -22485,7 +22462,7 @@ class QCAgent:
                 decision="pass",
                 score=combined_score,
                 evaluation=text_evaluation,
-                visual_evaluation=visual_evaluation,  # FIX #21
+                visual_evaluation=visual_evaluation,
                 ready_for_human_approval=True
             )
 
@@ -22498,7 +22475,7 @@ class QCAgent:
                 decision="revise",
                 score=combined_score,
                 evaluation=text_evaluation,
-                visual_evaluation=visual_evaluation,  # FIX #21
+                visual_evaluation=visual_evaluation,
                 revision_instructions=revision_instructions,
                 revision_targets={
                     "text": needs_text_revision,
@@ -22512,13 +22489,12 @@ class QCAgent:
                 decision="reject",
                 score=combined_score,
                 evaluation=text_evaluation,
-                visual_evaluation=visual_evaluation,  # FIX #21
+                visual_evaluation=visual_evaluation,
                 rejection_reason="Max revisions reached, quality still below threshold",
                 ready_for_human_approval=False
             )
 
 
-# FIX #21: Visual Quality Evaluator
 @dataclass
 class VisualEvaluation:
     """Result of visual quality evaluation."""
@@ -22533,7 +22509,7 @@ class VisualEvaluation:
 
 class VisualQualityEvaluator:
     """
-    FIX #21: Evaluates visual asset quality and content-visual coherence.
+    Evaluates visual asset quality and content-visual coherence.
     """
 
     # Expected visual format by content type
@@ -22881,7 +22857,7 @@ class AuthorProfileAgent:
         updated_profile.author_name = current_profile.author_name
         updated_profile.author_role = current_profile.author_role
         updated_profile.created_at = current_profile.created_at
-        updated_profile.last_updated = utc_now()  # FIX-024: Use timezone-aware datetime
+        updated_profile.last_updated = utc_now()
         updated_profile.posts_analyzed = current_profile.posts_analyzed + len(new_posts)
 
         await self.db.save_author_profile(updated_profile)
@@ -23040,11 +23016,11 @@ import pytz
 
 class PostStatus(str, Enum):
     """
-    FIX-026: Status of a scheduled post.
+    Status of a scheduled post.
     Replace magic strings with enum for type safety.
     """
     SCHEDULED = "scheduled"
-    PUBLISHING = "publishing"  # Being processed (FIX-017 atomic claim)
+    PUBLISHING = "publishing"  # Being processed (atomic claim)
     PUBLISHED = "published"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -23067,7 +23043,7 @@ class ScheduledPost:
     scheduled_time: datetime
     timezone: str
 
-    # Status - FIX-026: Now using PostStatus enum
+    # Status - Now using PostStatus enum
     status: PostStatus  # Use PostStatus enum instead of string
     published_at: Optional[datetime]
     linkedin_post_id: Optional[str]
@@ -23172,9 +23148,9 @@ class SchedulingSystem:
         """
         Schedule a post for publication.
         Handles conflict avoidance and optimal timing.
-        FIX-016: Use database-level locking to prevent race conditions.
+        Use database-level locking to prevent race conditions.
         """
-        # FIX-016: Validate preferred_time timezone awareness
+        # Validate preferred_time timezone awareness
         if preferred_time:
             if preferred_time.tzinfo is None:
                 raise ValidationError("preferred_time must be timezone-aware")
@@ -23183,7 +23159,7 @@ class SchedulingSystem:
             if preferred_time < datetime.now(timezone.utc) + min_lead_time:
                 raise ValidationError(f"Must schedule at least {min_lead_time} in advance")
 
-        # FIX-016: Use atomic reservation with advisory lock to prevent race conditions
+        # Use atomic reservation with advisory lock to prevent race conditions
         lock_key = f"schedule_slot_{preferred_time.isoformat() if preferred_time else 'auto'}"
         async with self.db.advisory_lock(lock_key):
             if preferred_time:
@@ -23208,7 +23184,7 @@ class SchedulingSystem:
                 status="scheduled",
                 published_at=None,
                 linkedin_post_id=None,
-                created_at=datetime.now(timezone.utc),  # FIX-016b: timezone-aware
+                created_at=datetime.now(timezone.utc),
                 approved_by=post.approved_by,
                 qc_score=post.qc_score
             )
@@ -23397,11 +23373,11 @@ class PublishingScheduler:
     async def _check_and_publish(self):
         """
         Check for posts due for publication.
-        FIX-017: Use atomic claim to prevent duplicate publishing.
+        Use atomic claim to prevent duplicate publishing.
         """
         now = datetime.now(timezone.utc)
 
-        # FIX-017: Atomic claim - only process posts we successfully claim
+        # Atomic claim - only process posts we successfully claim
         # This changes status from "scheduled" to "publishing" atomically
         claimed_posts = await self.scheduling.db.claim_due_posts(
             before_time=now + timedelta(minutes=1),
@@ -23415,7 +23391,6 @@ class PublishingScheduler:
             try:
                 await self._publish_post(post)
             except Exception as e:
-                # FIX-017b: On failure, mark as failed (not back to scheduled)
                 post.status = "failed"
                 post.error_message = str(e)
                 await self.scheduling.db.update_scheduled_post(post)
@@ -23438,7 +23413,7 @@ class PublishingScheduler:
 
             # Update status
             post.status = "published"
-            post.published_at = datetime.now(timezone.utc)  # FIX-017c: timezone-aware
+            post.published_at = datetime.now(timezone.utc)
             post.linkedin_post_id = linkedin_post_id
             await self.scheduling.db.update_scheduled_post(post)
 
