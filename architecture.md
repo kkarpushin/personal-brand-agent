@@ -10627,8 +10627,9 @@ from typing import TypedDict, List, Optional, Dict, Any
 from datetime import datetime
 from enum import Enum
 
-# Import all data classes
-from models import (
+# Import all data classes from centralized models
+# FIX: Use full path to avoid import conflicts with module-specific models.py files
+from src.models import (
     ContentType,
     TrendTopic, TrendScoutOutput,
     AnalysisBrief, TypeSpecificExtraction,
@@ -18571,13 +18572,18 @@ class DeepImprovementLoop:
     def __init__(
         self,
         creator: WriterAgent,
-        critic: CriticAgent,
+        critic: "SingleCallEvaluator",  # FIX: Was CriticAgent, now SingleCallEvaluator
         reflector: ReflectionEngine,
         researcher: ResearchAgent,
         code_evolver: CodeEvolutionEngine,
         knowledge_base: KnowledgeBase,
         db
     ):
+        """
+        NOTE: critic parameter accepts SingleCallEvaluator (preferred) which replaced
+        the multi-turn CriticAgent. SingleCallEvaluator is more efficient (single API call)
+        and provides structured feedback via rubric-based evaluation.
+        """
         self.creator = creator
         self.critic = critic
         self.reflector = reflector
@@ -20102,8 +20108,11 @@ CREATE INDEX idx_pending_approvals_requested ON pending_approvals(requested_at);
 ## Project Structure
 
 ```
-linkedin-super-agent/
+personal-brand-agent/
 ├── src/
+│   ├── models.py                # ═══ SHARED DATA TYPES (single source of truth) ═══
+│   │                            # ContentType, TrendTopic, AnalysisBrief, DraftPost,
+│   │                            # HumanizedPost, VisualAsset, QCResult, PipelineState
 │   ├── agents/
 │   │   ├── orchestrator.py      # LangGraph state machine
 │   │   ├── trend_scout.py       # Trend mining
@@ -20170,8 +20179,8 @@ linkedin-super-agent/
 │   └── schedule.json            # Modifiable by meta-agent
 ├── prompts/                     # ═══ EVOLVABLE PROMPTS ═══
 │   ├── writer_system.txt        # Writer agent system prompt (VERSIONED)
-│   ├── critic_system.txt        # Critic agent system prompt
-│   ├── evaluator_criteria.txt   # Self-evaluation criteria
+│   ├── evaluator_system.txt     # SingleCallEvaluator system prompt (replaces critic_system.txt)
+│   ├── evaluator_criteria.txt   # Self-evaluation rubric and criteria
 │   ├── humanizer_rules.txt      # Humanization guidelines
 │   └── versions/                # Prompt version history
 │       ├── writer_system_v1.txt # Original
