@@ -1208,6 +1208,60 @@ CREATE INDEX idx_pipeline_errors_created ON pipeline_errors(created_at DESC);
 CREATE INDEX idx_pipeline_errors_type ON pipeline_errors(error_type);
 
 -- ───────────────────────────────────────────────────────────────────────────
+-- AGENT_LOGS: Structured logging storage for AgentLogger
+-- ───────────────────────────────────────────────────────────────────────────
+CREATE TABLE agent_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+
+    -- Timing
+    timestamp TIMESTAMPTZ NOT NULL,
+
+    -- Classification
+    level INTEGER NOT NULL,                 -- LogLevel numeric value (10=DEBUG, 50=CRITICAL)
+    level_name TEXT NOT NULL,               -- Human-readable level name
+    component TEXT NOT NULL,                -- LogComponent value
+
+    -- Content
+    message TEXT NOT NULL,
+
+    -- Context
+    run_id TEXT,                            -- Pipeline run ID
+    post_id TEXT,                           -- Related post ID
+    data JSONB DEFAULT '{}',                -- Additional structured data
+
+    -- Error details (if applicable)
+    error_type TEXT,                        -- Exception class name
+    error_traceback TEXT,                   -- Full traceback
+
+    -- Performance
+    duration_ms INTEGER,                    -- Operation duration if timed
+
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Indexes for common queries
+CREATE INDEX idx_agent_logs_timestamp ON agent_logs(timestamp DESC);
+CREATE INDEX idx_agent_logs_level ON agent_logs(level);
+CREATE INDEX idx_agent_logs_component ON agent_logs(component);
+CREATE INDEX idx_agent_logs_run_id ON agent_logs(run_id) WHERE run_id IS NOT NULL;
+CREATE INDEX idx_agent_logs_error ON agent_logs(error_type) WHERE error_type IS NOT NULL;
+
+-- Retention policy: auto-delete logs older than 30 days (configurable)
+-- Run via pg_cron or scheduled function
+CREATE OR REPLACE FUNCTION cleanup_old_agent_logs(retention_days INTEGER DEFAULT 30)
+RETURNS INTEGER AS $$
+DECLARE
+    deleted_count INTEGER;
+BEGIN
+    DELETE FROM agent_logs
+    WHERE timestamp < NOW() - (retention_days || ' days')::INTERVAL;
+    GET DIAGNOSTICS deleted_count = ROW_COUNT;
+    RETURN deleted_count;
+END;
+$$ LANGUAGE plpgsql;
+
+-- ───────────────────────────────────────────────────────────────────────────
 -- RPC FUNCTIONS: Aggregation queries
 -- ───────────────────────────────────────────────────────────────────────────
 
@@ -20294,19 +20348,34 @@ linkedin-super-agent/
 from enum import Enum
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Callable
 import json
+import traceback
+import aiofiles  # For async file I/O
 
 
 class LogLevel(Enum):
-    DEBUG = "debug"      # Detailed debugging info
-    INFO = "info"        # Normal operations
-    WARNING = "warning"  # Something unexpected but not critical
-    ERROR = "error"      # Something failed
-    CRITICAL = "critical"  # System-level failure
+    """
+    Log levels with numeric values for proper severity comparison.
+
+    FIX: Changed from string values to integers.
+    String comparison doesn't work for severity ("debug" > "critical" = True lexicographically).
+    """
+    DEBUG = 10       # Detailed debugging info
+    INFO = 20        # Normal operations
+    WARNING = 30     # Something unexpected but not critical
+    ERROR = 40       # Something failed
+    CRITICAL = 50    # System-level failure
+
+    @property
+    def name_str(self) -> str:
+        """Get lowercase name for display/serialization."""
+        return self.name.lower()
 
 
 class LogComponent(Enum):
+    """All system components that can produce logs."""
+    # Core agents
     ORCHESTRATOR = "orchestrator"
     TREND_SCOUT = "trend_scout"
     ANALYZER = "analyzer"
@@ -20316,12 +20385,24 @@ class LogComponent(Enum):
     QC_AGENT = "qc_agent"
     META_AGENT = "meta_agent"
     EVALUATOR = "evaluator"
+
+    # Infrastructure
     MODIFICATION_SAFETY = "modification_safety"
     AUTHOR_PROFILE = "author_profile"
     SCHEDULER = "scheduler"
     LINKEDIN_CLIENT = "linkedin_client"
     ANALYTICS = "analytics"
     TELEGRAM = "telegram"
+
+    # Additional components (FIX: missing from original list)
+    CIRCUIT_BREAKER = "circuit_breaker"
+    PIPELINE_RECOVERY = "pipeline_recovery"
+    CODE_GENERATION = "code_generation"
+    ROLLBACK_MANAGER = "rollback_manager"
+    RESEARCH_AGENT = "research_agent"
+    CODE_EVOLUTION = "code_evolution"
+    SELF_MODIFICATION = "self_modification"
+    DATABASE = "database"
 
 
 @dataclass
@@ -20496,28 +20577,35 @@ class AgentLogger:
                 pass  # Don't let handler errors break logging
 
     async def _write_to_file(self, entry: LogEntry):
-        """Write log entry to file."""
+        """
+        Write log entry to file using async I/O.
+
+        FIX: Changed from sync open() to aiofiles for proper async file I/O.
+        Sync file operations block the event loop.
+        """
+        json_line = entry.to_json() + "\n"
 
         # Always write to main log
-        with open(self._main_log, "a", encoding="utf-8") as f:
-            f.write(entry.to_json() + "\n")
+        async with aiofiles.open(self._main_log, "a", encoding="utf-8") as f:
+            await f.write(json_line)
 
         # Write errors to separate file
-        if entry.level in [LogLevel.ERROR, LogLevel.CRITICAL]:
-            with open(self._error_log, "a", encoding="utf-8") as f:
-                f.write(entry.to_json() + "\n")
+        if entry.level.value >= LogLevel.ERROR.value:
+            async with aiofiles.open(self._error_log, "a", encoding="utf-8") as f:
+                await f.write(json_line)
 
         # Write debug to separate file
         if entry.level == LogLevel.DEBUG:
-            with open(self._debug_log, "a", encoding="utf-8") as f:
-                f.write(entry.to_json() + "\n")
+            async with aiofiles.open(self._debug_log, "a", encoding="utf-8") as f:
+                await f.write(json_line)
 
     async def _write_to_supabase(self, entry: LogEntry):
         """Write log entry to Supabase."""
         try:
             await self.supabase.insert("agent_logs", {
                 "timestamp": entry.timestamp.isoformat(),
-                "level": entry.level.value,
+                "level": entry.level.value,           # Numeric value for filtering
+                "level_name": entry.level.name_str,   # Human-readable name
                 "component": entry.component.value,
                 "message": entry.message,
                 "run_id": entry.run_id,
@@ -20528,9 +20616,9 @@ class AgentLogger:
                 "duration_ms": entry.duration_ms
             })
         except Exception as e:
-            # Log to file if Supabase fails
-            with open(self._error_log, "a", encoding="utf-8") as f:
-                f.write(f"Failed to write to Supabase: {e}\n")
+            # Log to file if Supabase fails (async to not block)
+            import sys
+            print(f"[LOGGING] Failed to write to Supabase: {e}", file=sys.stderr)
 
     async def _send_to_telegram(self, entry: LogEntry):
         """Send important log to Telegram."""
