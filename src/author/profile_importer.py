@@ -259,6 +259,10 @@ class ProfileImporter:
             normalized["visual_type"] = str(post["visual_type"])
         if "visual_url" in post:
             normalized["visual_url"] = str(post["visual_url"])
+        if "visual_urls" in post:
+            normalized["visual_urls"] = list(post["visual_urls"])
+        if "image_count" in post:
+            normalized["image_count"] = int(post["image_count"])
 
         return normalized
 
@@ -321,6 +325,8 @@ class ProfileImporter:
         # Extract media info from the raw Voyager response
         media_info = self._extract_media_info(raw)
 
+        visual_urls = media_info["visual_urls"]
+
         result: Dict[str, Any] = {
             "text": text,
             "likes": int(likes),
@@ -329,6 +335,8 @@ class ProfileImporter:
             "content_type": media_info["visual_type"] if media_info["visual_type"] != "none" else "text",
             "visual_type": media_info["visual_type"],
             "visual_url": media_info["visual_url"],
+            "visual_urls": visual_urls,
+            "image_count": len(visual_urls),
         }
         if linkedin_post_id:
             result["linkedin_post_id"] = str(linkedin_post_id)
@@ -411,6 +419,12 @@ class ProfileImporter:
             visual_url = post.get("visual_url")
             if visual_url:
                 row["visual_url"] = visual_url
+            visual_urls = post.get("visual_urls")
+            if visual_urls:
+                row["visual_urls"] = visual_urls
+            image_count = post.get("image_count")
+            if image_count is not None:
+                row["image_count"] = image_count
 
             db_rows.append(row)
 
@@ -458,28 +472,33 @@ class ProfileImporter:
     # ------------------------------------------------------------------
 
     def _extract_media_info(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Detect media type and extract image URL from a raw Voyager post.
+        """Detect media type and extract image URLs from a raw Voyager post.
 
         Iterates over the ``content`` dict keys looking for known component
         type substrings (ImageComponent, VideoComponent, etc.).
+
+        Multi-image posts use the same ``ImageComponent`` with multiple
+        entries in the ``images`` array.
 
         Args:
             raw: Raw post dict from the linkedin-api library.
 
         Returns:
-            Dict with ``visual_type`` (str) and ``visual_url`` (str).
+            Dict with ``visual_type`` (str), ``visual_url`` (str, first
+            image for backwards compat), and ``visual_urls`` (List[str],
+            all images).
         """
         visual_type = "none"
-        visual_url = ""
+        visual_urls: List[str] = []
 
         content = raw.get("content", {})
         if not isinstance(content, dict):
-            return {"visual_type": visual_type, "visual_url": visual_url}
+            return {"visual_type": visual_type, "visual_url": "", "visual_urls": []}
 
         for key, value in content.items():
             if "ImageComponent" in key:
                 visual_type = "image"
-                visual_url = self._extract_image_url(value)
+                visual_urls = self._extract_image_urls(value)
                 break
             elif "VideoComponent" in key or "LinkedInVideoComponent" in key:
                 visual_type = "video"
@@ -489,50 +508,53 @@ class ProfileImporter:
                 break
             elif "ArticleComponent" in key:
                 visual_type = "article"
-                visual_url = self._extract_article_image_url(value)
+                url = self._extract_article_image_url(value)
+                if url:
+                    visual_urls = [url]
                 break
 
-        return {"visual_type": visual_type, "visual_url": visual_url}
+        return {
+            "visual_type": visual_type,
+            "visual_url": visual_urls[0] if visual_urls else "",
+            "visual_urls": visual_urls,
+        }
 
     @staticmethod
-    def _extract_image_url(image_component: Any) -> str:
-        """Extract the highest-resolution image URL from an ImageComponent.
+    def _extract_image_urls(image_component: Any) -> List[str]:
+        """Extract highest-resolution URLs for ALL images in an ImageComponent.
 
-        The Voyager API stores images as::
-
-            images[0].attributes[0].vectorImage.rootUrl +
-            artifacts[max_width].fileIdentifyingUrlPathSegment
+        Multi-image LinkedIn posts store multiple entries in the ``images``
+        array within a single ``ImageComponent``.
 
         Args:
             image_component: The ImageComponent value from the content dict.
 
         Returns:
-            Full image URL string, or empty string if extraction fails.
+            List of full image URL strings (may be empty).
         """
+        urls: List[str] = []
         try:
             if not isinstance(image_component, dict):
-                return ""
+                return urls
             images = image_component.get("images", [])
-            if not images:
-                return ""
-            attrs = images[0].get("attributes", [])
-            if not attrs:
-                return ""
-            vector_image = attrs[0].get("vectorImage", {})
-            if not vector_image:
-                return ""
-            root_url = vector_image.get("rootUrl", "")
-            artifacts = vector_image.get("artifacts", [])
-            if not artifacts or not root_url:
-                return ""
-            # Pick the artifact with the largest width
-            best = max(artifacts, key=lambda a: a.get("width", 0))
-            segment = best.get("fileIdentifyingUrlPathSegment", "")
-            if segment:
-                return root_url + segment
+            for img in images:
+                attrs = img.get("attributes", [])
+                if not attrs:
+                    continue
+                vector_image = attrs[0].get("vectorImage", {})
+                if not vector_image:
+                    continue
+                root_url = vector_image.get("rootUrl", "")
+                artifacts = vector_image.get("artifacts", [])
+                if not artifacts or not root_url:
+                    continue
+                best = max(artifacts, key=lambda a: a.get("width", 0))
+                segment = best.get("fileIdentifyingUrlPathSegment", "")
+                if segment:
+                    urls.append(root_url + segment)
         except (IndexError, KeyError, TypeError):
             pass
-        return ""
+        return urls
 
     @staticmethod
     def _extract_article_image_url(article_component: Any) -> str:
@@ -613,23 +635,42 @@ class ProfileImporter:
                 return False
 
         for post in posts:
-            url = post.get("visual_url", "")
-            if not url or not url.startswith("http"):
-                continue
+            urls = post.get("visual_urls", [])
+            if not urls:
+                # Fallback for single-URL posts (e.g. from JSON import)
+                single = post.get("visual_url", "")
+                if single and single.startswith("http"):
+                    urls = [single]
+                else:
+                    continue
 
-            # Use hash of the URN (or URL) as filename
-            urn = post.get("linkedin_post_id", url)
-            file_hash = hashlib.sha256(urn.encode()).hexdigest()[:16]
-            dest = out_path / f"{file_hash}.jpg"
+            urn = post.get("linkedin_post_id", "")
+            local_paths: List[str] = []
 
-            if dest.exists():
-                post["visual_url"] = str(dest)
-                continue
+            for idx, url in enumerate(urls):
+                if not url.startswith("http"):
+                    local_paths.append(url)
+                    continue
 
-            ok = await asyncio.to_thread(_download_one, url, dest)
-            if ok:
-                logger.debug("Downloaded image to %s", dest)
-                post["visual_url"] = str(dest)
+                # Hash URN + index for unique filenames per image
+                hash_input = f"{urn or url}:{idx}"
+                file_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+                dest = out_path / f"{file_hash}.jpg"
+
+                if dest.exists():
+                    local_paths.append(str(dest))
+                    continue
+
+                ok = await asyncio.to_thread(_download_one, url, dest)
+                if ok:
+                    logger.debug("Downloaded image to %s", dest)
+                    local_paths.append(str(dest))
+                else:
+                    local_paths.append(url)  # keep CDN URL on failure
+
+            post["visual_urls"] = local_paths
+            post["visual_url"] = local_paths[0] if local_paths else ""
+            post["image_count"] = len(local_paths)
 
         return posts
 

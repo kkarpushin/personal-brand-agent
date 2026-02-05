@@ -28,6 +28,7 @@ class TestMediaExtraction:
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "none"
         assert result["visual_url"] == ""
+        assert result["visual_urls"] == []
 
     def test_image_post(self, importer):
         raw = {
@@ -60,6 +61,47 @@ class TestMediaExtraction:
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "image"
         assert result["visual_url"] == "https://media.licdn.com/img_800.jpg"
+        assert result["visual_urls"] == ["https://media.licdn.com/img_800.jpg"]
+
+    def test_multi_image_post(self, importer):
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.ImageComponent": {
+                    "images": [
+                        {
+                            "attributes": [{
+                                "vectorImage": {
+                                    "rootUrl": "https://media.licdn.com/",
+                                    "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "img1.jpg"}],
+                                }
+                            }]
+                        },
+                        {
+                            "attributes": [{
+                                "vectorImage": {
+                                    "rootUrl": "https://media.licdn.com/",
+                                    "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "img2.jpg"}],
+                                }
+                            }]
+                        },
+                        {
+                            "attributes": [{
+                                "vectorImage": {
+                                    "rootUrl": "https://media.licdn.com/",
+                                    "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "img3.jpg"}],
+                                }
+                            }]
+                        },
+                    ]
+                }
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "image"
+        assert len(result["visual_urls"]) == 3
+        assert result["visual_url"] == "https://media.licdn.com/img1.jpg"
+        assert result["visual_urls"][1] == "https://media.licdn.com/img2.jpg"
+        assert result["visual_urls"][2] == "https://media.licdn.com/img3.jpg"
 
     def test_video_post(self, importer):
         raw = {
@@ -121,6 +163,7 @@ class TestMediaExtraction:
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "article"
         assert result["visual_url"] == "https://media.licdn.com/article_1200.jpg"
+        assert result["visual_urls"] == ["https://media.licdn.com/article_1200.jpg"]
 
     def test_empty_content_dict(self, importer):
         raw = {"content": {}}
@@ -177,6 +220,8 @@ class TestNormalizeLinkedInPost:
         result = importer._normalize_linkedin_post(raw)
         assert result["visual_type"] == "none"
         assert result["visual_url"] == ""
+        assert result["visual_urls"] == []
+        assert result["image_count"] == 0
         assert result["content_type"] == "text"
 
     def test_image_post_sets_visual_fields(self, importer):
@@ -204,7 +249,28 @@ class TestNormalizeLinkedInPost:
         result = importer._normalize_linkedin_post(raw)
         assert result["visual_type"] == "image"
         assert result["visual_url"] == "https://cdn.licdn.com/pic.jpg"
+        assert result["visual_urls"] == ["https://cdn.licdn.com/pic.jpg"]
+        assert result["image_count"] == 1
         assert result["content_type"] == "image"
+
+    def test_multi_image_post_sets_all_urls(self, importer):
+        raw = {
+            "commentary": {"text": "Three photos"},
+            "content": {
+                "com.linkedin.voyager.feed.render.ImageComponent": {
+                    "images": [
+                        {"attributes": [{"vectorImage": {"rootUrl": "https://cdn.licdn.com/", "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "a.jpg"}]}}]},
+                        {"attributes": [{"vectorImage": {"rootUrl": "https://cdn.licdn.com/", "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "b.jpg"}]}}]},
+                        {"attributes": [{"vectorImage": {"rootUrl": "https://cdn.licdn.com/", "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "c.jpg"}]}}]},
+                    ]
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["visual_type"] == "image"
+        assert result["image_count"] == 3
+        assert len(result["visual_urls"]) == 3
+        assert result["visual_url"] == "https://cdn.licdn.com/a.jpg"
 
     def test_video_post_content_type(self, importer):
         raw = {
@@ -313,10 +379,10 @@ class TestVisualPatterns:
 # TestExtractImageUrl — static helpers
 # =========================================================================
 
-class TestExtractImageUrl:
-    """Tests for _extract_image_url and _extract_article_image_url."""
+class TestExtractImageUrls:
+    """Tests for _extract_image_urls and _extract_article_image_url."""
 
-    def test_extract_image_url_picks_max_width(self):
+    def test_extract_image_urls_picks_max_width(self):
         component = {
             "images": [
                 {
@@ -335,14 +401,26 @@ class TestExtractImageUrl:
                 }
             ]
         }
-        result = ProfileImporter._extract_image_url(component)
-        assert result == "https://media.licdn.com/large.jpg"
+        result = ProfileImporter._extract_image_urls(component)
+        assert result == ["https://media.licdn.com/large.jpg"]
 
-    def test_extract_image_url_none_input(self):
-        assert ProfileImporter._extract_image_url(None) == ""
+    def test_extract_image_urls_multiple(self):
+        component = {
+            "images": [
+                {"attributes": [{"vectorImage": {"rootUrl": "https://cdn.licdn.com/", "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "a.jpg"}]}}]},
+                {"attributes": [{"vectorImage": {"rootUrl": "https://cdn.licdn.com/", "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "b.jpg"}]}}]},
+            ]
+        }
+        result = ProfileImporter._extract_image_urls(component)
+        assert len(result) == 2
+        assert result[0] == "https://cdn.licdn.com/a.jpg"
+        assert result[1] == "https://cdn.licdn.com/b.jpg"
 
-    def test_extract_image_url_empty_dict(self):
-        assert ProfileImporter._extract_image_url({}) == ""
+    def test_extract_image_urls_none_input(self):
+        assert ProfileImporter._extract_image_urls(None) == []
+
+    def test_extract_image_urls_empty_dict(self):
+        assert ProfileImporter._extract_image_urls({}) == []
 
     def test_extract_article_image_url(self):
         component = {

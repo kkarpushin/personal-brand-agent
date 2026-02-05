@@ -8,3 +8,5 @@ ALTER TABLE author_profiles ADD COLUMN IF NOT EXISTS visual_type_performance JSO
 -- Add visual_type and visual_url columns to posts table for imported media info
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS visual_type TEXT DEFAULT 'none';
 ALTER TABLE posts ADD COLUMN IF NOT EXISTS visual_url TEXT DEFAULT '';
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS visual_urls TEXT[] DEFAULT '{}';
+ALTER TABLE posts ADD COLUMN IF NOT EXISTS image_count INTEGER DEFAULT 0;
