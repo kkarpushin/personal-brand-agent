@@ -450,7 +450,7 @@ async def topic_selection_node(state: PipelineState) -> Dict[str, Any]:
     if selection_mode == "auto_top_pick":
         selected = state.get("top_pick")
     elif selection_mode == "type_balance":
-        selected = select_for_type_balance(state["trend_topics"])
+        selected = await select_for_type_balance(state["trend_topics"])
     else:  # human_choice
         selected = state.get("selected_topic") or state.get("top_pick")
 
@@ -776,6 +776,7 @@ async def qc_node(state: PipelineState) -> Dict[str, Any]:
     revision_history = list(state.get("revision_history", []))
 
     decision = qc_output.result.decision
+    should_increment = decision.upper() != "PASS" and revision_count < MAX_REVISIONS
     if decision.upper() != "PASS":
         revision_history.append({
             "revision_number": revision_count + 1,
@@ -788,7 +789,7 @@ async def qc_node(state: PipelineState) -> Dict[str, Any]:
         "qc_result": qc_output.result,
         "qc_output": qc_output,
         "type_specific_scores": qc_output.result.type_specific_feedback,
-        "revision_count": revision_count + (1 if decision.upper() != "PASS" else 0),
+        "revision_count": revision_count + (1 if should_increment else 0),
         "revision_history": revision_history,
         "stage": "qc_completed",
     }
@@ -1186,10 +1187,11 @@ def determine_revision_target(qc_output) -> str:
     return "revise_writer"
 
 
-def select_for_type_balance(topics: List[TrendTopic]) -> TrendTopic:
+async def select_for_type_balance(topics: List[TrendTopic]) -> TrendTopic:
     """Select the topic that best balances content-type distribution.
 
-    Favours underrepresented types by boosting their score relative to the
+    Queries the database for recent post type counts and favours
+    underrepresented types by boosting their score relative to the
     target distribution.
     """
 
@@ -1201,11 +1203,24 @@ def select_for_type_balance(topics: List[TrendTopic]) -> TrendTopic:
         ContentType.TOOL_RELEASE: 0.15,
     }
 
-    # In production this would query the database for recent type counts.
-    # Here we use a stub that assumes uniform distribution.
-    recent_type_counts: Dict[ContentType, float] = {
-        ct: 0.2 for ct in ContentType
-    }
+    # Query database for recent content type distribution
+    recent_type_counts: Dict[ContentType, float] = {}
+    try:
+        db = await get_db()
+        total = await db.get_total_post_count()
+        if total > 0:
+            for ct in ContentType:
+                posts = await db.get_posts_by_content_type(ct.value, limit=100)
+                recent_type_counts[ct] = len(posts) / total
+        else:
+            # No posts yet — assume uniform distribution
+            recent_type_counts = {ct: 0.2 for ct in ContentType}
+    except Exception as exc:
+        logger.warning(
+            "Could not query type distribution from DB, using uniform: %s",
+            exc,
+        )
+        recent_type_counts = {ct: 0.2 for ct in ContentType}
 
     scored: List[tuple] = []
     for topic in topics:
@@ -1442,7 +1457,8 @@ def initialize_pipeline_state(
         error_stage=None,
         errors=[],
         warnings=[],
-        # Continuous learning (injected by run_pipeline)
+        # Continuous learning (learning_engine injected by run_pipeline)
+        learning_engine=None,
         iteration_learnings=None,
         learnings_used_count=0,
         is_first_post=False,

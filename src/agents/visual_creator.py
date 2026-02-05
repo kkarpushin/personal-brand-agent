@@ -542,6 +542,18 @@ class VisualCreatorAgent:
                 result.get("integration_mode"),
                 result.get("position"),
             )
+            # Record usage in photo library for freshness tracking
+            photo_path = result.get("photo_path")
+            if photo_path:
+                try:
+                    await self.photo_selector.photo_library.record_usage(
+                        photo_path=photo_path,
+                        post_id="pending",
+                    )
+                except Exception as exc:
+                    self.logger.warning(
+                        "Failed to record photo usage (non-critical): %s", exc
+                    )
         return result
 
     # ------------------------------------------------------------------

@@ -737,10 +737,105 @@ class PostMetricsSnapshot:
     likes: int = 0
     comments: int = 0
     reposts: int = 0
+
+    # ANALYTICS FIX 7.1: LinkedIn reaction types (not just total likes)
+    reactions_by_type: Dict[str, int] = field(default_factory=lambda: {
+        "LIKE": 0,
+        "CELEBRATE": 0,
+        "SUPPORT": 0,
+        "LOVE": 0,
+        "INSIGHTFUL": 0,
+        "FUNNY": 0,
+    })
+
     impressions: Optional[int] = None
+    clicks: Optional[int] = None
     engagement_rate: Optional[float] = None
+    likes_velocity: Optional[float] = None  # likes per minute since last snapshot
     minutes_after_post: int = 0
     collected_at: datetime = field(default_factory=utc_now)
+
+    # Scheduled checkpoint support (Fix for #27)
+    scheduled_checkpoint: Optional[int] = None  # e.g., 15, 30, 60, 180, 1440
+    collection_drift_seconds: Optional[int] = None
+
+
+@dataclass
+class PostPerformance:
+    """Complete performance record for a published post.
+
+    Includes QC metadata for feedback loop:
+    1. Correlation analysis: QC score vs actual performance
+    2. Threshold calibration: Adjust QC thresholds based on real data
+    3. Criterion weight optimization: Which criteria predict success?
+
+    Authoritative definition: ``architecture.md`` lines 13406-13493.
+    """
+
+    post_id: str
+    linkedin_url: str
+    published_at: datetime
+
+    # Content metadata (from generation)
+    content_type: ContentType
+    hook_style: HookStyle
+    template_used: str
+    visual_type: str
+    has_author_photo: bool
+    topic_summary: str
+
+    # QC metadata (for feedback loop)
+    qc_score: float
+    qc_criterion_scores: Dict[str, float]
+    revision_count: int
+    auto_approved: bool
+    meta_evaluation_score: Optional[float]
+    threshold_used: float
+
+    # Lineage
+    pipeline_run_id: str
+    topic_id: str
+
+    # A/B Testing support
+    experiment_id: Optional[str] = None
+    experiment_variant: Optional[str] = None
+
+    # Metrics snapshots
+    snapshots: List[PostMetricsSnapshot] = field(default_factory=list)
+
+    # Key milestones
+    metrics_15min: Optional[PostMetricsSnapshot] = None
+    metrics_30min: Optional[PostMetricsSnapshot] = None
+    metrics_1hour: Optional[PostMetricsSnapshot] = None
+    metrics_24hour: Optional[PostMetricsSnapshot] = None
+    metrics_final: Optional[PostMetricsSnapshot] = None  # 48h
+
+    # Calculated scores
+    golden_hour_score: float = 0.0
+    final_score: float = 0.0
+    percentile_rank: float = 0.0
+
+    # Comparisons
+    vs_average: float = 1.0
+    vs_content_type_avg: float = 1.0
+    vs_same_day_time_avg: float = 1.0
+
+
+@dataclass
+class AnalyticsInsight:
+    """Actionable insight derived from analytics.
+
+    Authoritative definition: ``architecture.md`` lines 13496-13511.
+    """
+
+    insight_type: str  # content_type_performance / timing_pattern / visual_impact
+    description: str
+    confidence: float  # 0-1
+    sample_size: int
+    recommendation: str
+    affected_component: str  # trend_scout / writer / visual_creator / scheduler
+    parameter_to_adjust: Optional[str] = None
+    suggested_value: Optional[Any] = None
 
 
 # =============================================================================
@@ -969,6 +1064,7 @@ class PipelineState(TypedDict, total=False):
     # -----------------------------------------------------------------
     # CONTINUOUS LEARNING ENGINE
     # -----------------------------------------------------------------
+    learning_engine: Optional[Any]  # Injected by run_pipeline
     iteration_learnings: Optional[Any]
     learnings_used_count: int
     is_first_post: bool
@@ -1017,6 +1113,8 @@ __all__ = [
     "QCOutput",
     # Analytics
     "PostMetricsSnapshot",
+    "PostPerformance",
+    "AnalyticsInsight",
     # Pipeline State
     "PipelineState",
     # Constants

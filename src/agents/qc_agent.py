@@ -30,6 +30,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.models import (
@@ -420,11 +421,24 @@ TONE_EXPECTATIONS: Dict[ContentType, str] = {
 
 
 # =============================================================================
-# DEFAULT THRESHOLDS
+# DEFAULT THRESHOLDS (loaded from config/scoring_weights.json if available)
 # =============================================================================
 
-DEFAULT_PASS_THRESHOLD: float = 8.0
-DEFAULT_REJECT_THRESHOLD: float = 5.5
+
+def _load_qc_thresholds() -> Dict[str, Any]:
+    """Load QC thresholds from config/scoring_weights.json."""
+    config_path = Path(__file__).resolve().parent.parent.parent / "config" / "scoring_weights.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        return config.get("qc_thresholds", {})
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+_QC_THRESHOLDS = _load_qc_thresholds()
+DEFAULT_PASS_THRESHOLD: float = _QC_THRESHOLDS.get("default_pass", 8.0)
+DEFAULT_REJECT_THRESHOLD: float = _QC_THRESHOLDS.get("default_reject", 5.5)
 
 
 # =============================================================================
@@ -502,6 +516,9 @@ Score ALL of these criteria: {criteria_names}
         self.claude = claude
         self.pass_threshold = pass_threshold
         self.reject_threshold = reject_threshold
+        self._type_overrides: Dict[str, Dict[str, float]] = _QC_THRESHOLDS.get(
+            "content_type_overrides", {}
+        )
         self.logger = logger
 
     # ------------------------------------------------------------------
@@ -571,8 +588,8 @@ Score ALL of these criteria: {criteria_names}
         # 5. Calculate weighted aggregate
         aggregate = self._calculate_weighted_score(scores, weights)
 
-        # 6. Make decision
-        decision = self._make_decision(aggregate)
+        # 6. Make decision (uses content-type-specific thresholds)
+        decision = self._make_decision(aggregate, content_type)
 
         self.logger.info(
             "QC evaluation complete: aggregate=%.2f decision=%s",
@@ -629,13 +646,18 @@ Score ALL of these criteria: {criteria_names}
         )
 
         # 10. Build QCOutput
+        resolved_pass, resolved_reject = self._resolve_thresholds(content_type)
         output = QCOutput(
             result=result,
             scoring_weights_used=weights,
             type_adjustments_applied={
                 "content_type": content_type.value,
-                "pass_threshold": self.pass_threshold,
-                "reject_threshold": self.reject_threshold,
+                "pass_threshold": resolved_pass,
+                "reject_threshold": resolved_reject,
+                "default_pass_threshold": self.pass_threshold,
+                "default_reject_threshold": self.reject_threshold,
+                "threshold_overridden": resolved_pass != self.pass_threshold
+                or resolved_reject != self.reject_threshold,
                 "weight_overrides_applied": bool(
                     self._get_type_weight_overrides(content_type)
                 ),
@@ -861,22 +883,49 @@ Score ALL of these criteria: {criteria_names}
         return round(weighted_sum / total_weight, 2)
 
     # ------------------------------------------------------------------
+    # THRESHOLD RESOLUTION
+    # ------------------------------------------------------------------
+
+    def _resolve_thresholds(self, content_type: ContentType) -> Tuple[float, float]:
+        """Resolve pass/reject thresholds, preferring content-type overrides.
+
+        Looks up the ``content_type_overrides`` section of the QC threshold
+        config.  If the current content type has an entry, those values take
+        precedence over the instance-level defaults.
+
+        Args:
+            content_type: The content type to resolve thresholds for.
+
+        Returns:
+            A ``(pass_threshold, reject_threshold)`` tuple.
+        """
+        overrides = self._type_overrides.get(content_type.value, {})
+        pass_t: float = overrides.get("pass", self.pass_threshold)
+        reject_t: float = overrides.get("reject", self.reject_threshold)
+        return pass_t, reject_t
+
+    # ------------------------------------------------------------------
     # DECISION LOGIC
     # ------------------------------------------------------------------
 
-    def _make_decision(self, aggregate_score: float) -> str:
+    def _make_decision(self, aggregate_score: float, content_type: ContentType) -> str:
         """
         Make pass / revise / reject decision based on aggregate score.
 
+        Uses content-type-specific thresholds when available, falling back
+        to the instance-level defaults.
+
         Args:
             aggregate_score: Weighted aggregate (0-10).
+            content_type: The content type (used to resolve thresholds).
 
         Returns:
             One of ``"pass"``, ``"revise"``, ``"reject"``.
         """
-        if aggregate_score >= self.pass_threshold:
+        pass_t, reject_t = self._resolve_thresholds(content_type)
+        if aggregate_score >= pass_t:
             return "pass"
-        if aggregate_score >= self.reject_threshold:
+        if aggregate_score >= reject_t:
             return "revise"
         return "reject"
 

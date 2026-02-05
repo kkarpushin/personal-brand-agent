@@ -19,5 +19,16 @@
     "automation_case": 1.0,
     "community_content": 0.9,
     "tool_release": 0.8
+  },
+  "qc_thresholds": {
+    "default_pass": 8.0,
+    "default_reject": 5.5,
+    "content_type_overrides": {
+      "enterprise_case": {"pass": 7.2, "reject": 5.0},
+      "primary_source": {"pass": 7.5, "reject": 5.5},
+      "automation_case": {"pass": 7.0, "reject": 5.0},
+      "community_content": {"pass": 6.8, "reject": 5.0},
+      "tool_release": {"pass": 7.0, "reject": 5.5}
+    }
   }
 }

@@ -842,10 +842,29 @@ class WriterAgent:
             analysis_brief, content_type, draft.hook
         )
 
-        # 9. Assemble WriterOutput (matches models.py WriterOutput)
+        # 9. Build alternative drafts from alt hooks
+        alternatives: List[DraftPost] = []
+        for alt_hook in alt_hooks:
+            alt_draft = DraftPost(
+                hook=alt_hook,
+                body=draft.body,
+                cta=draft.cta,
+                hashtags=draft.hashtags,
+                full_text=alt_hook + "\n\n" + draft.body + "\n\n" + draft.cta,
+                template_used=draft.template_used,
+                hook_style=draft.hook_style,
+                content_type=draft.content_type,
+                character_count=len(alt_hook) + len(draft.body) + len(draft.cta) + 4,
+                visual_brief=draft.visual_brief,
+                visual_type=draft.visual_type,
+                key_terms=draft.key_terms,
+            )
+            alternatives.append(alt_draft)
+
+        # 10. Assemble WriterOutput (matches models.py WriterOutput)
         return WriterOutput(
             primary_draft=draft,
-            alternatives=[],  # alternatives populated by orchestrator if needed
+            alternatives=alternatives,
             template_category=self._template_category(template, content_type),
             generation_metadata={
                 "template_used": template["name"],
