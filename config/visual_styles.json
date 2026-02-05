@@ -1,0 +1,29 @@
+{
+  "brand_colors": {
+    "primary": "#1a1a2e",
+    "secondary": "#16213e",
+    "accent": "#0f3460",
+    "highlight": "#e94560",
+    "text": "#ffffff",
+    "text_secondary": "#a8a8a8"
+  },
+  "format_mapping": {
+    "enterprise_case": ["metrics_card", "case_study_visual", "logo_showcase"],
+    "primary_source": ["data_chart", "quote_card", "source_screenshot"],
+    "automation_case": ["workflow_diagram", "before_after", "screenshot"],
+    "community_content": ["photo_with_overlay", "meme_format", "carousel"],
+    "tool_release": ["product_screenshot", "feature_comparison", "demo_gif"]
+  },
+  "photo_usage": {
+    "enterprise_case": 0.7,
+    "primary_source": 0.3,
+    "automation_case": 0.5,
+    "community_content": 0.8,
+    "tool_release": 0.4
+  },
+  "dimensions": {
+    "single_image": "1200x1200",
+    "carousel": "1080x1080",
+    "document": "1200x1500"
+  }
+}

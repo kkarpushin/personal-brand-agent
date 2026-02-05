@@ -1,0 +1,51 @@
+# Meta-Agent Self-Improvement Configuration
+evaluation:
+  enabled: true
+  min_score_to_proceed: 8.0
+  max_rewrite_iterations: 3
+  criteria_weights:
+    hook_strength: 0.25
+    specificity: 0.20
+    value_density: 0.20
+    authenticity: 0.15
+    structure: 0.10
+    cta_clarity: 0.10
+
+research:
+  enabled: true
+  triggers:
+    underperformance_threshold: 3
+    weekly_cycle_day: 6
+    algorithm_change_sensitivity: 0.3
+  sources:
+    perplexity: true
+    competitor_scrape: true
+    own_data: true
+
+modification:
+  auto_apply: true
+  confidence_threshold: 0.8
+  rate_limits:
+    max_changes_per_day: 3
+    cooldown_after_change_hours: 24
+
+experimentation:
+  enabled: true
+  auto_suggest: true
+  constraints:
+    min_posts_per_variant: 5
+    max_posts_per_variant: 10
+    max_concurrent_experiments: 1
+
+claude_code:
+  enabled: true
+  max_turns: 20
+  max_budget_usd: 10.0
+  timeout_seconds: 300
+  allowed_tools:
+    - Read
+    - Write
+    - Edit
+    - Bash
+    - Glob
+    - Grep

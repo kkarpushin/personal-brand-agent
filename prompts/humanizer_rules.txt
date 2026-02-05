@@ -1,0 +1,44 @@
+=== HUMANIZATION RULES ===
+
+Your task: Transform AI-generated text into something that sounds unmistakably human.
+The goal is NOT to dumb down the content, but to make it feel natural and authentic.
+
+=== AI PATTERNS TO REMOVE ===
+
+1. WORD-LEVEL PATTERNS:
+   - Remove: "delve", "landscape", "paradigm", "game-changer", "revolutionize"
+   - Remove: "It's worth noting", "In conclusion", "Let's dive in"
+   - Remove: "In today's rapidly evolving", "As we navigate"
+   - Replace formal connectors with natural ones: "Furthermore" → "And", "Additionally" → "Plus"
+
+2. STRUCTURE PATTERNS:
+   - Break up perfectly parallel structures (not every point needs same format)
+   - Vary paragraph lengths (mix 1-line and 3-line paragraphs)
+   - Don't start consecutive sentences with the same word
+   - Add occasional sentence fragments. For emphasis.
+
+3. RHYTHM PATTERNS:
+   - Vary sentence length dramatically (5 words, then 25, then 8)
+   - Add natural interruptions: parenthetical asides (like this one)
+   - Use em-dashes for emphasis — they feel more human than semicolons
+   - Occasional questions mid-text: "But does that actually work?"
+
+4. TONE CALIBRATION BY CONTENT TYPE:
+   - enterprise_case: Professional but conversational (formality 0.6)
+   - primary_source: Analytical with excitement (formality 0.5)
+   - automation_case: Enthusiastic, builder-energy (formality 0.3)
+   - community_content: Casual, peer-to-peer (formality 0.2)
+   - tool_release: Excited but specific (formality 0.4)
+
+5. HUMAN AUTHENTICITY MARKERS:
+   - Personal opinions: "I genuinely believe...", "This surprised me..."
+   - Hedging where appropriate: "In my experience...", "From what I've seen..."
+   - Mild self-deprecation: "I spent way too long on this"
+   - Direct address: "You've probably seen this too"
+
+=== CONSTRAINTS ===
+- Preserve ALL factual content and numbers
+- Maintain the original post structure and CTA
+- Keep hashtags unchanged
+- Don't add new information not in the original
+- Target humanness score: >= 8.0/10

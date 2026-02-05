@@ -1,0 +1,18 @@
+{
+  "optimal_slots": [
+    {"day": 1, "hour": 8, "minute": 30, "priority": 1, "reason": "Tuesday morning - peak LinkedIn engagement"},
+    {"day": 1, "hour": 12, "minute": 0, "priority": 2, "reason": "Tuesday lunch break"},
+    {"day": 2, "hour": 9, "minute": 0, "priority": 1, "reason": "Wednesday morning - high activity"},
+    {"day": 2, "hour": 17, "minute": 30, "priority": 2, "reason": "Wednesday evening commute"},
+    {"day": 3, "hour": 8, "minute": 0, "priority": 1, "reason": "Thursday morning - strong engagement"},
+    {"day": 3, "hour": 12, "minute": 30, "priority": 3, "reason": "Thursday lunch"},
+    {"day": 0, "hour": 10, "minute": 0, "priority": 3, "reason": "Monday mid-morning"},
+    {"day": 4, "hour": 9, "minute": 0, "priority": 3, "reason": "Friday morning - lower but still active"}
+  ],
+  "constraints": {
+    "min_hours_between_posts": 4,
+    "max_posts_per_day": 2,
+    "blackout_hours": [0, 1, 2, 3, 4, 5, 22, 23],
+    "timezone": "UTC"
+  }
+}

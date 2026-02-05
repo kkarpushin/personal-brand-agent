@@ -1,0 +1,23 @@
+{
+  "target_length": {
+    "min_chars": 800,
+    "max_chars": 3000,
+    "optimal_chars": 1500
+  },
+  "hook": {
+    "max_chars": 210,
+    "styles_enabled": ["impossible_result", "contrarian", "surprising_finding", "question", "story_open"]
+  },
+  "formatting": {
+    "max_emojis": 4,
+    "hashtag_count": {"min": 3, "max": 5},
+    "paragraph_max_lines": 3,
+    "use_line_breaks": true
+  },
+  "style": {
+    "formality": 0.4,
+    "first_person_allowed": true,
+    "avoid_phrases": ["In today's rapidly evolving", "It's worth noting", "In conclusion", "Let's dive in"],
+    "preferred_cta": ["question", "share_experience", "tag_someone", "save_for_later"]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "trend_scoring": {
+    "recency": 0.25,
+    "relevance": 0.30,
+    "virality_potential": 0.20,
+    "uniqueness": 0.15,
+    "data_richness": 0.10
+  },
+  "source_weights": {
+    "perplexity": 0.30,
+    "arxiv": 0.25,
+    "twitter": 0.20,
+    "hacker_news": 0.15,
+    "reddit": 0.10
+  },
+  "content_type_priorities": {
+    "enterprise_case": 1.2,
+    "primary_source": 1.1,
+    "automation_case": 1.0,
+    "community_content": 0.9,
+    "tool_release": 0.8
+  }
+}
