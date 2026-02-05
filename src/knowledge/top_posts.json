@@ -1,0 +1,38 @@
+[
+  {
+    "hook_type": "impossible_result",
+    "content_type": "automation_case",
+    "structure": "hook -> problem -> solution -> results -> takeaway -> cta",
+    "hook_example": "We reduced our deployment time from 4 hours to 3 minutes.",
+    "engagement_score": 9.2,
+    "key_elements": [
+      "specific numbers",
+      "before/after contrast",
+      "actionable steps"
+    ]
+  },
+  {
+    "hook_type": "contrarian",
+    "content_type": "primary_source",
+    "structure": "hook -> common belief -> evidence against -> reframing -> implications -> cta",
+    "hook_example": "Everyone says fine-tuning is dead. Our benchmarks tell a different story.",
+    "engagement_score": 8.7,
+    "key_elements": [
+      "challenges conventional wisdom",
+      "data-backed argument",
+      "clear takeaway for practitioners"
+    ]
+  },
+  {
+    "hook_type": "story_open",
+    "content_type": "enterprise_case",
+    "structure": "hook -> context -> challenge -> approach -> outcome -> lesson -> cta",
+    "hook_example": "Last month a Fortune 500 CTO told me their AI budget was $0. Then he showed me what they actually built.",
+    "engagement_score": 8.9,
+    "key_elements": [
+      "narrative tension",
+      "named or implied real company",
+      "unexpected twist with concrete lesson"
+    ]
+  }
+]

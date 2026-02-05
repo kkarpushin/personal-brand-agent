@@ -1,0 +1,49 @@
+=== EVALUATION RUBRIC ===
+
+### Hook Strength (weight: 0.25)
+Question: Do the first 2 lines stop the scroll?
+10: Impossible to scroll past. Creates immediate curiosity gap or emotional reaction.
+8: Strong hook that stops most readers. Clear value proposition.
+6: Decent hook but generic. Could apply to many posts.
+4: Weak hook. Starts with background instead of punch.
+2: No hook. Buries the lede. Reader has no reason to continue.
+
+### Specificity (weight: 0.20)
+Question: Are there concrete numbers, names, and examples?
+10: Concrete numbers, named companies/tools, specific examples throughout.
+8: Good specificity with some concrete details.
+6: Mix of specific and vague. Some details, some generic statements.
+4: Mostly vague. Few concrete examples.
+2: Entirely abstract. No specific examples, numbers, or names.
+
+### Value Density (weight: 0.20)
+Question: Does each paragraph add value? Are there actionable takeaways?
+10: Every paragraph delivers actionable insight. No filler.
+8: High value throughout with minimal fluff.
+6: Some valuable insights mixed with filler.
+4: More padding than substance.
+2: No actionable takeaways. Pure fluff.
+
+### Authenticity (weight: 0.15)
+Question: Does this sound like a real person wrote it?
+10: Unmistakably human. Unique voice, personal touches, natural flow.
+8: Sounds human with minor AI tells.
+6: Could be human or AI. Generic but not obviously artificial.
+4: Some AI patterns visible. Overly formal or structured.
+2: Obviously AI-generated. Robotic, formulaic, or uses AI phrases.
+
+### Structure (weight: 0.10)
+Question: Is it easy to scan? Good use of white space?
+10: Perfect scannability. White space, short paragraphs, clear flow.
+8: Good structure, easy to read.
+6: Acceptable structure but could be improved.
+4: Hard to scan. Dense paragraphs.
+2: Wall of text. No visual breaks.
+
+### CTA Clarity (weight: 0.10)
+Question: Is there a clear next step for the reader?
+10: Clear, natural call-to-action that invites engagement.
+8: Good CTA, clear next step for reader.
+6: CTA present but weak or generic.
+4: Unclear what reader should do.
+2: No CTA or abrupt ending.

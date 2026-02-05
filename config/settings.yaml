@@ -1,0 +1,49 @@
+# LinkedIn Super Agent - Main Settings
+app:
+  name: "LinkedIn Super Agent"
+  version: "0.1.0"
+  log_level: "INFO"
+
+supabase:
+  url: "${SUPABASE_URL}"
+  key: "${SUPABASE_KEY}"
+
+llm:
+  provider: "anthropic"
+  model: "claude-opus-4-5-20251101"
+  thinking_mode: true
+  max_tokens: 4096
+  temperature: 0.7
+
+perplexity:
+  model: "sonar-pro"
+  max_tokens: 2048
+
+image_generation:
+  provider: "laozhang"
+  model: "gemini-3-pro-image-preview"
+  base_url: "${LAOZHANG_API_BASE}"
+  default_size: "1024x1024"
+
+linkedin:
+  rate_limit_delay_seconds: 7.0
+  max_posts_per_day: 2
+
+pipeline:
+  max_revisions: 3
+  node_timeout_seconds: 120
+  selection_mode: "auto_top_pick"
+
+autonomy:
+  default_level: 3
+  auto_publish_threshold: 9.0
+  notify_on_publish: true
+  notify_on_modification: true
+  auto_degradation:
+    enabled: true
+    consecutive_failures_threshold: 3
+    degradation_duration_hours: 24
+
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"

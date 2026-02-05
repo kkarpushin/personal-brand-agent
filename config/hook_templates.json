@@ -1,0 +1,27 @@
+{
+  "impossible_result": {
+    "template": "{old_metric} \u2192 {new_metric}. Here's how:",
+    "best_for": ["automation_case", "enterprise_case"],
+    "examples": ["40 hours \u2192 2 minutes", "$50K budget \u2192 $0", "6 months \u2192 2 weeks"]
+  },
+  "contrarian": {
+    "template": "Everyone says {common_belief}. But {counter_example} proves otherwise.",
+    "best_for": ["enterprise_case", "primary_source"],
+    "examples": ["Everyone says AI will replace developers.", "Everyone says you need a large team."]
+  },
+  "surprising_finding": {
+    "template": "New research shows: {counterintuitive_fact}",
+    "best_for": ["primary_source"],
+    "examples": ["New research: 73% of AI projects fail not because of tech."]
+  },
+  "question": {
+    "template": "{provocative_question}",
+    "best_for": ["community_content", "tool_release"],
+    "examples": ["What if your entire CI/CD pipeline could fit in one prompt?"]
+  },
+  "story_open": {
+    "template": "Last {timeframe}, {unexpected_event}.",
+    "best_for": ["automation_case", "community_content"],
+    "examples": ["Last Tuesday, our CEO asked me to automate his job."]
+  }
+}

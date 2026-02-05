@@ -1,0 +1,47 @@
+{
+  "ai_tell_phrases": [
+    "delve",
+    "landscape",
+    "paradigm shift",
+    "game-changer",
+    "revolutionize",
+    "In today's rapidly evolving",
+    "It's worth noting",
+    "Let's dive in",
+    "As we navigate",
+    "At the end of the day",
+    "Moving the needle",
+    "Unlock the power of"
+  ],
+  "weak_hooks": [
+    "In today's world...",
+    "Have you ever wondered...",
+    "As professionals, we all know...",
+    "I'm excited to share...",
+    "Happy to announce...",
+    "Thrilled to be part of..."
+  ],
+  "generic_ctas": [
+    "What do you think?",
+    "Thoughts?",
+    "Let me know in the comments",
+    "Agree or disagree?",
+    "Drop a comment below"
+  ],
+  "formatting_mistakes": [
+    "wall of text",
+    "too many emojis (>4)",
+    "more than 5 hashtags",
+    "all-caps headers",
+    "excessive bullet points (>7)",
+    "no line breaks between paragraphs"
+  ],
+  "content_mistakes": [
+    "no specific numbers",
+    "no named examples",
+    "pure opinion without evidence",
+    "clickbait without delivery",
+    "restating the obvious",
+    "ending without a clear takeaway"
+  ]
+}

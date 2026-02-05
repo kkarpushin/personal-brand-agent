@@ -1,0 +1,34 @@
+{
+  "trend_scoring": {
+    "recency": 0.25,
+    "relevance": 0.30,
+    "virality_potential": 0.20,
+    "uniqueness": 0.15,
+    "data_richness": 0.10
+  },
+  "source_weights": {
+    "perplexity": 0.30,
+    "arxiv": 0.25,
+    "twitter": 0.20,
+    "hacker_news": 0.15,
+    "reddit": 0.10
+  },
+  "content_type_priorities": {
+    "enterprise_case": 1.2,
+    "primary_source": 1.1,
+    "automation_case": 1.0,
+    "community_content": 0.9,
+    "tool_release": 0.8
+  },
+  "qc_thresholds": {
+    "default_pass": 8.0,
+    "default_reject": 5.5,
+    "content_type_overrides": {
+      "enterprise_case": {"pass": 7.2, "reject": 5.0},
+      "primary_source": {"pass": 7.5, "reject": 5.5},
+      "automation_case": {"pass": 7.0, "reject": 5.0},
+      "community_content": {"pass": 6.8, "reject": 5.0},
+      "tool_release": {"pass": 7.0, "reject": 5.5}
+    }
+  }
+}
