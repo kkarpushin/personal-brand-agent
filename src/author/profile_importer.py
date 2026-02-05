@@ -26,6 +26,8 @@ but structural problems in the JSON file raise immediately.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -100,8 +102,6 @@ class ProfileImporter:
         # The LinkedInClient wraps the sync library with asyncio.to_thread.
         api = await self.linkedin_client._get_api()
 
-        import asyncio
-
         def _resolve_urn_id() -> str:
             """Resolve public_id to a URN ID for get_profile_posts.
 
@@ -149,6 +149,10 @@ class ProfileImporter:
             posts.append(post)
 
         validated = self._validate_posts(posts)
+
+        # Download images locally before persisting (CDN URLs expire)
+        if self.linkedin_client is not None:
+            validated = await self._download_images(validated)
 
         logger.info(
             "Imported %d posts from LinkedIn (%d after validation)",
@@ -250,6 +254,12 @@ class ProfileImporter:
         if lid:
             normalized["linkedin_post_id"] = str(lid)
 
+        # Pass through visual fields if present in input JSON
+        if "visual_type" in post:
+            normalized["visual_type"] = str(post["visual_type"])
+        if "visual_url" in post:
+            normalized["visual_url"] = str(post["visual_url"])
+
         return normalized
 
     def _normalize_linkedin_post(self, raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -308,12 +318,17 @@ class ProfileImporter:
             or ""
         )
 
+        # Extract media info from the raw Voyager response
+        media_info = self._extract_media_info(raw)
+
         result: Dict[str, Any] = {
             "text": text,
             "likes": int(likes),
             "comments": int(comments),
             "date": date,
-            "content_type": "text",
+            "content_type": media_info["visual_type"] if media_info["visual_type"] != "none" else "text",
+            "visual_type": media_info["visual_type"],
+            "visual_url": media_info["visual_url"],
         }
         if linkedin_post_id:
             result["linkedin_post_id"] = str(linkedin_post_id)
@@ -389,6 +404,14 @@ class ProfileImporter:
             if date_str:
                 row["published_at"] = date_str
 
+            # Include visual media fields if present
+            visual_type = post.get("visual_type")
+            if visual_type:
+                row["visual_type"] = visual_type
+            visual_url = post.get("visual_url")
+            if visual_url:
+                row["visual_url"] = visual_url
+
             db_rows.append(row)
 
         if not db_rows:
@@ -429,6 +452,186 @@ class ProfileImporter:
                 logger.warning(
                     "Failed to store baseline metrics for %s", lid, exc_info=True
                 )
+
+    # ------------------------------------------------------------------
+    # MEDIA EXTRACTION
+    # ------------------------------------------------------------------
+
+    def _extract_media_info(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        """Detect media type and extract image URL from a raw Voyager post.
+
+        Iterates over the ``content`` dict keys looking for known component
+        type substrings (ImageComponent, VideoComponent, etc.).
+
+        Args:
+            raw: Raw post dict from the linkedin-api library.
+
+        Returns:
+            Dict with ``visual_type`` (str) and ``visual_url`` (str).
+        """
+        visual_type = "none"
+        visual_url = ""
+
+        content = raw.get("content", {})
+        if not isinstance(content, dict):
+            return {"visual_type": visual_type, "visual_url": visual_url}
+
+        for key, value in content.items():
+            if "ImageComponent" in key:
+                visual_type = "image"
+                visual_url = self._extract_image_url(value)
+                break
+            elif "VideoComponent" in key or "LinkedInVideoComponent" in key:
+                visual_type = "video"
+                break
+            elif "CarouselComponent" in key:
+                visual_type = "carousel"
+                break
+            elif "ArticleComponent" in key:
+                visual_type = "article"
+                visual_url = self._extract_article_image_url(value)
+                break
+
+        return {"visual_type": visual_type, "visual_url": visual_url}
+
+    @staticmethod
+    def _extract_image_url(image_component: Any) -> str:
+        """Extract the highest-resolution image URL from an ImageComponent.
+
+        The Voyager API stores images as::
+
+            images[0].attributes[0].vectorImage.rootUrl +
+            artifacts[max_width].fileIdentifyingUrlPathSegment
+
+        Args:
+            image_component: The ImageComponent value from the content dict.
+
+        Returns:
+            Full image URL string, or empty string if extraction fails.
+        """
+        try:
+            if not isinstance(image_component, dict):
+                return ""
+            images = image_component.get("images", [])
+            if not images:
+                return ""
+            attrs = images[0].get("attributes", [])
+            if not attrs:
+                return ""
+            vector_image = attrs[0].get("vectorImage", {})
+            if not vector_image:
+                return ""
+            root_url = vector_image.get("rootUrl", "")
+            artifacts = vector_image.get("artifacts", [])
+            if not artifacts or not root_url:
+                return ""
+            # Pick the artifact with the largest width
+            best = max(artifacts, key=lambda a: a.get("width", 0))
+            segment = best.get("fileIdentifyingUrlPathSegment", "")
+            if segment:
+                return root_url + segment
+        except (IndexError, KeyError, TypeError):
+            pass
+        return ""
+
+    @staticmethod
+    def _extract_article_image_url(article_component: Any) -> str:
+        """Extract the large image URL from an ArticleComponent.
+
+        Args:
+            article_component: The ArticleComponent value from content dict.
+
+        Returns:
+            Image URL string, or empty string if not found.
+        """
+        try:
+            if not isinstance(article_component, dict):
+                return ""
+            large_image = article_component.get("largeImage", {})
+            if not isinstance(large_image, dict):
+                return ""
+            attrs = large_image.get("attributes", [])
+            if not attrs:
+                return ""
+            vector_image = attrs[0].get("vectorImage", {})
+            if not vector_image:
+                return ""
+            root_url = vector_image.get("rootUrl", "")
+            artifacts = vector_image.get("artifacts", [])
+            if not artifacts or not root_url:
+                return ""
+            best = max(artifacts, key=lambda a: a.get("width", 0))
+            segment = best.get("fileIdentifyingUrlPathSegment", "")
+            if segment:
+                return root_url + segment
+        except (IndexError, KeyError, TypeError):
+            pass
+        return ""
+
+    # ------------------------------------------------------------------
+    # IMAGE DOWNLOAD
+    # ------------------------------------------------------------------
+
+    async def _download_images(
+        self,
+        posts: List[Dict[str, Any]],
+        output_dir: str = "data/imported_images",
+    ) -> List[Dict[str, Any]]:
+        """Download images from LinkedIn CDN to local storage.
+
+        LinkedIn CDN URLs expire, so local copies preserve images for
+        future analysis.  Downloads run in a background thread to avoid
+        blocking the event loop.
+
+        Args:
+            posts: List of normalised post dicts (may contain ``visual_url``).
+            output_dir: Directory to save images to.
+
+        Returns:
+            The same list with ``visual_url`` updated to local paths on
+            success.  On failure, the CDN URL is kept as-is.
+        """
+        out_path = Path(output_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+
+        # Get the requests session from the LinkedIn client for auth cookies
+        try:
+            api = await self.linkedin_client._get_api()
+            session = api.client.session
+        except Exception:
+            logger.warning("Could not get LinkedIn session for image downloads")
+            return posts
+
+        def _download_one(url: str, dest: Path) -> bool:
+            try:
+                resp = session.get(url, timeout=30)
+                resp.raise_for_status()
+                dest.write_bytes(resp.content)
+                return True
+            except Exception as exc:
+                logger.warning("Failed to download image %s: %s", url, exc)
+                return False
+
+        for post in posts:
+            url = post.get("visual_url", "")
+            if not url or not url.startswith("http"):
+                continue
+
+            # Use hash of the URN (or URL) as filename
+            urn = post.get("linkedin_post_id", url)
+            file_hash = hashlib.sha256(urn.encode()).hexdigest()[:16]
+            dest = out_path / f"{file_hash}.jpg"
+
+            if dest.exists():
+                post["visual_url"] = str(dest)
+                continue
+
+            ok = await asyncio.to_thread(_download_one, url, dest)
+            if ok:
+                logger.debug("Downloaded image to %s", dest)
+                post["visual_url"] = str(dest)
+
+        return posts
 
     # ------------------------------------------------------------------
     # PRIVATE HELPERS

@@ -98,6 +98,11 @@ class AuthorVoiceProfile:
     posting_frequency: str  # "daily", "3x/week", etc.
     best_posting_times: List[str]
 
+    # Visual content preferences
+    visual_content_ratio: float = 0.0
+    preferred_visual_types: List[str] = field(default_factory=list)
+    visual_type_performance: Dict[str, float] = field(default_factory=dict)
+
     # Metadata
     created_at: datetime = field(default_factory=utc_now)
     last_updated: datetime = field(default_factory=utc_now)

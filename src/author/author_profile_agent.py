@@ -86,6 +86,12 @@ class AuthorProfileAgent:
        - Contrarian views they hold
        - Topics they're passionate about
 
+    5.5. VISUAL CONTENT PATTERNS
+       - Posts are tagged with [visual: image/video/carousel/article/none]
+       - Note what fraction of posts include visual content
+       - Which visual types correlate with higher engagement
+       - Any patterns in how they pair visuals with text
+
     6. WHAT TO AVOID
        - Phrases they never use
        - Topics they avoid
@@ -174,6 +180,8 @@ class AuthorProfileAgent:
     - Concise (fit in a system prompt section)
     - Specific (use actual phrases and examples from the profile)
     - Prioritized (most important voice markers first)
+    - Include visual content recommendations (preferred visual types,
+      visual content ratio, which visual types drive best engagement)
 
     Return ONLY the style guide text, no JSON wrapper.
     """
@@ -258,12 +266,20 @@ class AuthorProfileAgent:
         if extracted_hooks:
             profile.best_performing_hooks = extracted_hooks
 
+        # Compute visual content patterns from metadata (no API calls)
+        visual_patterns = self._compute_visual_patterns(posts)
+        profile.visual_content_ratio = visual_patterns["visual_content_ratio"]
+        profile.preferred_visual_types = visual_patterns["preferred_visual_types"]
+        profile.visual_type_performance = visual_patterns["visual_type_performance"]
+
         logger.info(
-            "Profile created for '%s': %d phrases, %d hooks, formality=%.2f",
+            "Profile created for '%s': %d phrases, %d hooks, formality=%.2f, "
+            "visual_ratio=%.2f",
             author_name,
             len(profile.characteristic_phrases),
             len(profile.best_performing_hooks),
             profile.formality_level,
+            profile.visual_content_ratio,
         )
 
         return profile
@@ -406,6 +422,9 @@ class AuthorProfileAgent:
             "topics_of_interest": profile.favorite_topics,
             "posting_frequency": profile.posting_frequency,
             "best_posting_times": profile.best_posting_times,
+            "visual_content_ratio": profile.visual_content_ratio,
+            "preferred_visual_types": profile.preferred_visual_types,
+            "visual_type_performance": profile.visual_type_performance,
             "updated_at": profile.last_updated.isoformat(),
         }
 
@@ -473,6 +492,9 @@ class AuthorProfileAgent:
         if "updated_at" in data:
             data.setdefault("last_updated", data.pop("updated_at"))
 
+        # Visual fields map 1:1 between DB and dataclass (no rename needed)
+        # They are picked up by _dict_to_profile via .get() with defaults.
+
         return self._dict_to_profile(data)
 
     # ------------------------------------------------------------------
@@ -492,11 +514,69 @@ class AuthorProfileAgent:
         for i, p in enumerate(posts):
             engagement = p.get("likes", 0) + p.get("comments", 0) * 3
             text = p.get("text", p.get("content", ""))[:1500]  # Truncate long posts
+            visual_type = p.get("visual_type", "none")
+            visual_tag = f" [visual: {visual_type}]" if visual_type != "none" else ""
             formatted.append(
-                f"--- Post {i + 1} (engagement score: {engagement}) ---\n"
+                f"--- Post {i + 1} (engagement score: {engagement}){visual_tag} ---\n"
                 f"{text}\n"
             )
         return "\n".join(formatted)
+
+    @staticmethod
+    def _compute_visual_patterns(posts: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Compute visual content statistics from post metadata.
+
+        Pure metadata analysis -- no Claude API calls required.  Counts
+        visual types, computes the ratio of posts with visual content,
+        and correlates visual type with engagement score.
+
+        Args:
+            posts: List of post dicts with optional ``visual_type`` key.
+
+        Returns:
+            Dict with ``visual_content_ratio`` (float),
+            ``preferred_visual_types`` (list of types sorted by frequency),
+            and ``visual_type_performance`` (dict mapping type to avg
+            engagement score).
+        """
+        if not posts:
+            return {
+                "visual_content_ratio": 0.0,
+                "preferred_visual_types": [],
+                "visual_type_performance": {},
+            }
+
+        type_counts: Dict[str, int] = {}
+        type_engagement: Dict[str, List[float]] = {}
+
+        for p in posts:
+            vtype = p.get("visual_type", "none")
+            type_counts[vtype] = type_counts.get(vtype, 0) + 1
+            engagement = float(p.get("likes", 0) + p.get("comments", 0) * 3)
+            type_engagement.setdefault(vtype, []).append(engagement)
+
+        total = len(posts)
+        visual_count = total - type_counts.get("none", 0)
+        visual_content_ratio = visual_count / total if total > 0 else 0.0
+
+        # Sort non-"none" types by frequency (descending)
+        preferred = sorted(
+            [t for t in type_counts if t != "none"],
+            key=lambda t: type_counts[t],
+            reverse=True,
+        )
+
+        # Average engagement per visual type
+        type_performance: Dict[str, float] = {}
+        for vtype, scores in type_engagement.items():
+            if scores:
+                type_performance[vtype] = round(sum(scores) / len(scores), 1)
+
+        return {
+            "visual_content_ratio": round(visual_content_ratio, 3),
+            "preferred_visual_types": preferred,
+            "visual_type_performance": type_performance,
+        }
 
     def _extract_hooks(self, posts: List[Dict[str, Any]]) -> List[str]:
         """Extract opening hooks (first 2 non-empty lines) from top posts.
@@ -550,6 +630,9 @@ class AuthorProfileAgent:
             best_performing_structures=data.get("best_performing_structures", []),
             posting_frequency=data.get("posting_frequency", ""),
             best_posting_times=data.get("best_posting_times", []),
+            visual_content_ratio=float(data.get("visual_content_ratio", 0.0)),
+            preferred_visual_types=data.get("preferred_visual_types", []),
+            visual_type_performance=data.get("visual_type_performance", {}),
             posts_analyzed=int(data.get("posts_analyzed", 0)),
         )
 
