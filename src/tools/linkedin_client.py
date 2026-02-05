@@ -37,6 +37,64 @@ COOKIES_PATH = Path("data/linkedin_cookies.json")
 COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
 
 
+def _upload_image(api: Any, image_path: str) -> Optional[str]:
+    """Upload an image to LinkedIn and return the image URN.
+
+    Uses Voyager's image upload endpoint (same as the web client).
+    """
+    file_path = Path(image_path)
+    if not file_path.exists():
+        logger.warning("Image file not found: %s", image_path)
+        return None
+
+    file_size = file_path.stat().st_size
+    file_bytes = file_path.read_bytes()
+
+    # Step 1: Register upload
+    register_payload = {
+        "mediaUploadType": "IMAGE_SHARING",
+        "fileSize": file_size,
+        "filename": file_path.name,
+    }
+    reg_res = api._post(
+        "/voyager/api/voyagerMediaUploadMetadata?"
+        "action=upload",
+        base_request=True,
+        json=register_payload,
+    )
+
+    if reg_res.status_code not in (200, 201):
+        logger.warning("Image upload registration failed: %s", reg_res.status_code)
+        return None
+
+    reg_data = reg_res.json().get("value", reg_res.json())
+    upload_url = reg_data.get("singleUploadUrl") or reg_data.get("uploadUrl")
+    image_urn = reg_data.get("urn") or reg_data.get("image")
+
+    if not upload_url:
+        logger.warning("No upload URL in registration response")
+        return None
+
+    # Step 2: Upload binary
+    import requests as req_lib
+
+    upload_res = req_lib.put(
+        upload_url,
+        data=file_bytes,
+        headers={
+            "Content-Type": "application/octet-stream",
+        },
+        cookies=api.client.session.cookies,
+    )
+
+    if upload_res.status_code not in (200, 201):
+        logger.warning("Image binary upload failed: %s", upload_res.status_code)
+        return None
+
+    logger.info("Image uploaded: urn=%s, size=%d bytes", image_urn, file_size)
+    return image_urn
+
+
 # ======================================================================
 # COOKIE MANAGEMENT
 # ======================================================================
@@ -355,7 +413,7 @@ class LinkedInClient:
         text: str,
         image_path: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Publish a post to LinkedIn.
+        """Publish a post to LinkedIn via Voyager API.
 
         Args:
             text: Post body text.
@@ -370,30 +428,75 @@ class LinkedInClient:
         """
         api = await self._get_api()
 
-        def _post() -> Any:
+        def _publish() -> Dict[str, Any]:
             try:
-                if image_path:
-                    return api.post(text, media_path=image_path)
-                return api.post(text)
-            except Exception as exc:
-                error_str = str(exc).lower()
-                if "rate" in error_str or "429" in error_str:
+                # Get author URN
+                profile = api.get_user_profile()
+                member_urn = profile["miniProfile"]["entityUrn"]
+                # Convert fs_miniProfile URN to member URN
+                member_id = member_urn.split(":")[-1]
+                author_urn = f"urn:li:fsd_profile:{member_id}"
+
+                # Upload image if provided
+                image_urn = None
+                if image_path and Path(image_path).exists():
+                    image_urn = _upload_image(api, image_path)
+
+                # Build post payload (Voyager contentCreation endpoint)
+                media_list = []
+                if image_urn:
+                    media_list.append({
+                        "category": "IMAGE",
+                        "mediaUrn": image_urn,
+                    })
+
+                payload = {
+                    "visibleToConnectionsOnly": False,
+                    "externalAudienceProviders": [],
+                    "commentaryV2": {
+                        "text": text,
+                        "attributesV2": [],
+                    },
+                    "origin": "FEED",
+                    "allowedCommentersScope": "ALL",
+                    "postState": "PUBLISHED",
+                    "mediaCategory": "IMAGE" if media_list else "NONE",
+                    "media": media_list,
+                }
+
+                res = api._post(
+                    "/voyager/api/contentcreation/normShares",
+                    base_request=True,
+                    json=payload,
+                )
+
+                if res.status_code in (200, 201):
+                    post_id = res.headers.get("x-restli-id", "unknown")
+                    logger.info(
+                        "LinkedIn post published: text_len=%d, has_image=%s, id=%s",
+                        len(text),
+                        image_path is not None,
+                        post_id,
+                    )
+                    return {"post_id": post_id, "status": "published"}
+
+                error_str = res.text[:500]
+                if res.status_code == 429:
                     raise LinkedInRateLimitError(
-                        f"LinkedIn rate limit hit: {exc}"
-                    ) from exc
+                        f"LinkedIn rate limit: {res.status_code}"
+                    )
+                raise LinkedInAPIError(
+                    f"LinkedIn post failed ({res.status_code}): {error_str}"
+                )
+
+            except (LinkedInRateLimitError, LinkedInAPIError):
+                raise
+            except Exception as exc:
                 raise LinkedInAPIError(
                     f"LinkedIn post failed: {exc}"
                 ) from exc
 
-        result = await asyncio.to_thread(_post)
-
-        logger.info(
-            "LinkedIn post published: text_len=%d, has_image=%s",
-            len(text),
-            image_path is not None,
-        )
-
-        return {"post_id": str(result), "status": "published"}
+        return await asyncio.to_thread(_publish)
 
     # ------------------------------------------------------------------
     # Metrics retrieval
