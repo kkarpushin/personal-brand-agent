@@ -40,10 +40,18 @@ class ProfileImporter:
     Args:
         linkedin_client: An optional async ``LinkedInClient`` instance.
             Required only for ``import_from_linkedin()``.
+        db: An optional async ``SupabaseDB`` instance.  When provided,
+            imported posts are persisted to the ``posts`` table and
+            baseline metrics snapshots are stored.
     """
 
-    def __init__(self, linkedin_client: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        linkedin_client: Optional[Any] = None,
+        db: Optional[Any] = None,
+    ) -> None:
         self.linkedin_client = linkedin_client
+        self.db = db
 
     # ------------------------------------------------------------------
     # LINKEDIN IMPORT
@@ -124,18 +132,20 @@ class ProfileImporter:
             len(validated),
         )
 
+        await self._persist_posts(validated)
+
         return validated
 
     # ------------------------------------------------------------------
     # JSON FILE IMPORT
     # ------------------------------------------------------------------
 
-    def import_from_json(self, file_path: str) -> List[Dict[str, Any]]:
+    async def import_from_json(self, file_path: str) -> List[Dict[str, Any]]:
         """Import posts from a local JSON file.
 
         The JSON file must contain an array of post objects.  Each object
         should have at minimum a ``text`` key.  Optional keys: ``likes``,
-        ``comments``, ``date``, ``content_type``.
+        ``comments``, ``date``, ``content_type``, ``linkedin_post_id``.
 
         Args:
             file_path: Path to the JSON file.
@@ -181,6 +191,8 @@ class ProfileImporter:
             len(validated),
         )
 
+        await self._persist_posts(validated)
+
         return validated
 
     # ------------------------------------------------------------------
@@ -198,15 +210,23 @@ class ProfileImporter:
 
         Returns:
             Normalised post dict with keys: ``text``, ``likes``,
-            ``comments``, ``date``, ``content_type``.
+            ``comments``, ``date``, ``content_type``, and optionally
+            ``linkedin_post_id``.
         """
-        return {
+        normalized: Dict[str, Any] = {
             "text": post.get("text", post.get("content", post.get("body", ""))),
             "likes": int(post.get("likes", post.get("reactions", 0))),
             "comments": int(post.get("comments", post.get("comment_count", 0))),
             "date": str(post.get("date", post.get("published_at", post.get("created_at", "")))),
             "content_type": str(post.get("content_type", post.get("type", "text"))),
         }
+
+        # Preserve linkedin_post_id if present (for DB persistence)
+        lid = post.get("linkedin_post_id", post.get("id", ""))
+        if lid:
+            normalized["linkedin_post_id"] = str(lid)
+
+        return normalized
 
     def _normalize_linkedin_post(self, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Normalise a raw LinkedIn Voyager API post into standard format.
@@ -249,13 +269,25 @@ class ProfileImporter:
         if created_at:
             date = str(created_at)
 
-        return {
+        # Extract LinkedIn URN as stable post identifier
+        linkedin_post_id = (
+            raw.get("entityUrn")
+            or raw.get("urn")
+            or raw.get("dashEntityUrn")
+            or ""
+        )
+
+        result: Dict[str, Any] = {
             "text": text,
             "likes": int(likes),
             "comments": int(comments),
             "date": date,
             "content_type": "text",
         }
+        if linkedin_post_id:
+            result["linkedin_post_id"] = str(linkedin_post_id)
+
+        return result
 
     # ------------------------------------------------------------------
     # VALIDATION
@@ -288,6 +320,83 @@ class ProfileImporter:
             )
 
         return valid
+
+    # ------------------------------------------------------------------
+    # PERSISTENCE
+    # ------------------------------------------------------------------
+
+    async def _persist_posts(self, posts: List[Dict[str, Any]]) -> None:
+        """Persist validated posts to the database (no-op when ``db`` is None).
+
+        For each post that has a ``linkedin_post_id``, builds a row for the
+        ``posts`` table and calls ``db.upsert_imported_posts()``.  If the
+        post has engagement data (``likes`` / ``comments``), a baseline
+        metrics snapshot is also stored via ``db.store_metrics_snapshot()``.
+        """
+        if self.db is None:
+            return
+
+        db_rows: List[Dict[str, Any]] = []
+        for post in posts:
+            lid = post.get("linkedin_post_id")
+            if not lid:
+                continue
+
+            text = post.get("text", "")
+            first_line = text.split("\n")[0].strip()[:210] if text else ""
+
+            row: Dict[str, Any] = {
+                "linkedin_post_id": lid,
+                "text_content": text,
+                "content_type": "imported",
+                "hook": first_line,
+            }
+
+            # Map publication date if available
+            date_str = post.get("date", "")
+            if date_str:
+                row["published_at"] = date_str
+
+            db_rows.append(row)
+
+        if not db_rows:
+            return
+
+        count = await self.db.upsert_imported_posts(db_rows)
+        logger.info("Persisted %d imported posts to database", count)
+
+        # Store baseline metrics for posts that have engagement data.
+        # We need the DB-assigned post IDs, so look them up by linkedin_post_id.
+        for post in posts:
+            lid = post.get("linkedin_post_id")
+            likes = post.get("likes", 0)
+            comments = post.get("comments", 0)
+            if not lid or (likes == 0 and comments == 0):
+                continue
+
+            # Look up the post row to get its UUID
+            try:
+                result = await (
+                    self.db.client.table("posts")
+                    .select("id")
+                    .eq("linkedin_post_id", lid)
+                    .limit(1)
+                    .execute()
+                )
+                if not result.data:
+                    continue
+
+                post_id = result.data[0]["id"]
+                await self.db.store_metrics_snapshot({
+                    "post_id": post_id,
+                    "likes": likes,
+                    "comments": comments,
+                    "minutes_after_post": 0,
+                })
+            except Exception:
+                logger.warning(
+                    "Failed to store baseline metrics for %s", lid, exc_info=True
+                )
 
     # ------------------------------------------------------------------
     # PRIVATE HELPERS

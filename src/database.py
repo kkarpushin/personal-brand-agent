@@ -175,6 +175,31 @@ class SupabaseDB:
             raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
+    async def upsert_imported_posts(
+        self, posts: List[Dict[str, Any]]
+    ) -> int:
+        """Upsert imported posts into the ``posts`` table.
+
+        Each post dict is expected to contain at least ``linkedin_post_id``
+        and ``text_content``.  Existing rows with the same
+        ``linkedin_post_id`` are updated; new rows are inserted.
+
+        Args:
+            posts: List of post dicts to upsert.
+
+        Returns:
+            Number of rows upserted.
+        """
+        if not posts:
+            return 0
+
+        result = await (
+            self.client.table("posts")
+            .upsert(posts, on_conflict="linkedin_post_id")
+            .execute()
+        )
+        return len(result.data) if result.data else 0
+
     async def get_post(self, post_id: str) -> Optional[Dict[str, Any]]:
         """Get a post by ID.
 
