@@ -492,3 +492,319 @@ class TestExtractImageUrls:
     def test_extract_article_image_url_empty(self):
         assert ProfileImporter._extract_article_image_url({}) == ""
         assert ProfileImporter._extract_article_image_url(None) == ""
+
+
+# =========================================================================
+# TestDocumentExtraction — DocumentComponent (carousels/PDFs)
+# =========================================================================
+
+class TestDocumentExtraction:
+    """Tests for DocumentComponent detection and metadata extraction."""
+
+    def test_document_post_detected(self, importer):
+        """DocumentComponent nests data under 'document' key."""
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.DocumentComponent": {
+                    "document": {
+                        "title": "My Carousel",
+                        "totalPageCount": 10,
+                        "transcribedDocumentUrl": "https://example.com/doc.pdf",
+                    }
+                }
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "document"
+        assert result["document_title"] == "My Carousel"
+        assert result["page_count"] == 10
+        assert result["document_url"] == "https://example.com/doc.pdf"
+
+    def test_document_with_cover_pages(self, importer):
+        """Cover pages use pagesPerResolution with imageUrls arrays."""
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.DocumentComponent": {
+                    "document": {
+                        "title": "Slides",
+                        "totalPageCount": 5,
+                        "coverPages": {
+                            "pagesPerResolution": [
+                                {
+                                    "width": 483,
+                                    "imageUrls": [
+                                        "https://media.licdn.com/cover1_small.jpg",
+                                        "https://media.licdn.com/cover2_small.jpg",
+                                    ],
+                                },
+                                {
+                                    "width": 1282,
+                                    "imageUrls": [
+                                        "https://media.licdn.com/cover1_large.jpg",
+                                        "https://media.licdn.com/cover2_large.jpg",
+                                    ],
+                                },
+                            ]
+                        },
+                    }
+                }
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "document"
+        # Should pick highest resolution (width=1282)
+        assert len(result["visual_urls"]) == 2
+        assert result["visual_url"] == "https://media.licdn.com/cover1_large.jpg"
+        assert result["visual_urls"][1] == "https://media.licdn.com/cover2_large.jpg"
+
+    def test_document_empty_component(self, importer):
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.DocumentComponent": {}
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "document"
+        assert result["document_title"] == ""
+        assert result["page_count"] == 0
+
+    def test_extract_document_info_not_dict(self):
+        result = ProfileImporter._extract_document_info("string")
+        assert result["document_title"] == ""
+        assert result["page_count"] == 0
+        assert result["cover_images"] == []
+
+    def test_extract_document_info_none(self):
+        result = ProfileImporter._extract_document_info(None)
+        assert result["document_title"] == ""
+
+    def test_document_in_normalize_linkedin_post(self, importer):
+        raw = {
+            "commentary": {"text": "Check out my slides"},
+            "content": {
+                "com.linkedin.voyager.feed.render.DocumentComponent": {
+                    "document": {
+                        "title": "AI Trends 2025",
+                        "totalPageCount": 12,
+                        "transcribedDocumentUrl": "https://example.com/slides.pdf",
+                    }
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["visual_type"] == "document"
+        assert result["content_type"] == "document"
+        assert result["document_title"] == "AI Trends 2025"
+        assert result["page_count"] == 12
+        assert result["document_url"] == "https://example.com/slides.pdf"
+
+
+# =========================================================================
+# TestArticleExtraction — ArticleComponent URL and title
+# =========================================================================
+
+class TestArticleExtraction:
+    """Tests for ArticleComponent URL and title extraction."""
+
+    def test_article_with_url_and_title(self, importer):
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.ArticleComponent": {
+                    "navigationContext": {
+                        "actionTarget": "https://example.com/my-article",
+                    },
+                    "title": {"text": "My Article Title"},
+                    "largeImage": {
+                        "attributes": [{
+                            "vectorImage": {
+                                "rootUrl": "https://media.licdn.com/",
+                                "artifacts": [{"width": 800, "fileIdentifyingUrlPathSegment": "art.jpg"}],
+                            }
+                        }]
+                    },
+                }
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "article"
+        assert result["article_url"] == "https://example.com/my-article"
+        assert result["article_title"] == "My Article Title"
+        assert result["visual_url"] == "https://media.licdn.com/art.jpg"
+
+    def test_article_without_nav_context(self, importer):
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.ArticleComponent": {
+                    "title": {"text": "Title Only"},
+                }
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "article"
+        assert result["article_url"] == ""
+        assert result["article_title"] == "Title Only"
+
+    def test_article_string_title(self):
+        result = ProfileImporter._extract_article_info({"title": "Plain String Title"})
+        assert result["article_title"] == "Plain String Title"
+
+    def test_article_info_empty(self):
+        result = ProfileImporter._extract_article_info({})
+        assert result["article_url"] == ""
+        assert result["article_title"] == ""
+
+    def test_article_info_none(self):
+        result = ProfileImporter._extract_article_info(None)
+        assert result["article_url"] == ""
+
+    def test_article_in_normalize_linkedin_post(self, importer):
+        raw = {
+            "commentary": {"text": "Read my article"},
+            "content": {
+                "com.linkedin.voyager.feed.render.ArticleComponent": {
+                    "navigationContext": {"actionTarget": "https://blog.example.com/post"},
+                    "title": {"text": "Blog Post"},
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["article_url"] == "https://blog.example.com/post"
+        assert result["article_title"] == "Blog Post"
+
+
+# =========================================================================
+# TestVideoExtraction — VideoComponent duration and thumbnail
+# =========================================================================
+
+class TestVideoExtraction:
+    """Tests for VideoComponent duration and thumbnail extraction."""
+
+    def test_video_with_metadata(self, importer):
+        """Video thumbnail uses rootUrl + artifacts directly (no vectorImage)."""
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.LinkedInVideoComponent": {
+                    "videoPlayMetadata": {
+                        "duration": 38800,
+                        "thumbnail": {
+                            "rootUrl": "https://media.licdn.com/videocover-",
+                            "artifacts": [
+                                {"width": 1314, "fileIdentifyingUrlPathSegment": "high/thumb.jpg"},
+                                {"width": 656, "fileIdentifyingUrlPathSegment": "low/thumb.jpg"},
+                            ],
+                        },
+                    }
+                }
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "video"
+        assert result["video_duration"] == 38800.0
+        assert result["video_thumbnail"] == "https://media.licdn.com/videocover-high/thumb.jpg"
+        assert result["visual_url"] == "https://media.licdn.com/videocover-high/thumb.jpg"
+
+    def test_video_without_metadata(self, importer):
+        raw = {
+            "content": {
+                "com.linkedin.voyager.feed.render.LinkedInVideoComponent": {}
+            }
+        }
+        result = importer._extract_media_info(raw)
+        assert result["visual_type"] == "video"
+        assert result["video_duration"] == 0.0
+        assert result["video_thumbnail"] == ""
+
+    def test_extract_video_info_not_dict(self):
+        result = ProfileImporter._extract_video_info("string")
+        assert result["video_duration"] == 0.0
+        assert result["video_thumbnail"] == ""
+
+    def test_extract_video_info_none(self):
+        result = ProfileImporter._extract_video_info(None)
+        assert result["video_duration"] == 0.0
+
+    def test_video_in_normalize_linkedin_post(self, importer):
+        raw = {
+            "commentary": {"text": "Watch this"},
+            "content": {
+                "com.linkedin.voyager.feed.render.LinkedInVideoComponent": {
+                    "videoPlayMetadata": {
+                        "duration": 60000,
+                    }
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["visual_type"] == "video"
+        assert result["video_duration"] == 60000.0
+
+
+# =========================================================================
+# TestSharesAndReactions — engagement metadata
+# =========================================================================
+
+class TestSharesAndReactions:
+    """Tests for shares count and reaction type breakdown extraction."""
+
+    def test_shares_extracted(self, importer):
+        raw = {
+            "commentary": {"text": "Hello"},
+            "socialDetail": {
+                "totalSocialActivityCounts": {
+                    "numLikes": 10,
+                    "numComments": 2,
+                    "numShares": 5,
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["shares"] == 5
+
+    def test_reaction_types_extracted(self, importer):
+        raw = {
+            "commentary": {"text": "Hello"},
+            "socialDetail": {
+                "totalSocialActivityCounts": {
+                    "numLikes": 20,
+                    "numComments": 3,
+                    "numShares": 1,
+                    "reactionTypeCounts": [
+                        {"reactionType": "LIKE", "count": 15},
+                        {"reactionType": "EMPATHY", "count": 3},
+                        {"reactionType": "PRAISE", "count": 2},
+                    ],
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["reactions_by_type"]["LIKE"] == 15
+        assert result["reactions_by_type"]["EMPATHY"] == 3
+        assert result["reactions_by_type"]["PRAISE"] == 2
+
+    def test_no_shares_defaults_zero(self, importer):
+        raw = {"commentary": {"text": "Hello"}}
+        result = importer._normalize_linkedin_post(raw)
+        assert result["shares"] == 0
+
+    def test_no_reactions_no_key(self, importer):
+        raw = {"commentary": {"text": "Hello"}}
+        result = importer._normalize_linkedin_post(raw)
+        assert "reactions_by_type" not in result
+
+    def test_empty_reaction_list(self, importer):
+        raw = {
+            "commentary": {"text": "Hello"},
+            "socialDetail": {
+                "totalSocialActivityCounts": {
+                    "numLikes": 5,
+                    "reactionTypeCounts": [],
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert "reactions_by_type" not in result
+
+    def test_shares_in_normalize_post(self, importer):
+        post = {"text": "Some post", "shares": 3}
+        result = importer._normalize_post(post)
+        assert result["shares"] == 3

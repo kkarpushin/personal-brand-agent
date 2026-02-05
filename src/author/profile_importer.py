@@ -245,6 +245,7 @@ class ProfileImporter:
             "text": post.get("text", post.get("content", post.get("body", ""))),
             "likes": int(post.get("likes", post.get("reactions", 0))),
             "comments": int(post.get("comments", post.get("comment_count", 0))),
+            "shares": int(post.get("shares", 0)),
             "date": str(post.get("date", post.get("published_at", post.get("created_at", "")))),
             "content_type": str(post.get("content_type", post.get("type", "text"))),
         }
@@ -255,14 +256,24 @@ class ProfileImporter:
             normalized["linkedin_post_id"] = str(lid)
 
         # Pass through visual fields if present in input JSON
-        if "visual_type" in post:
-            normalized["visual_type"] = str(post["visual_type"])
-        if "visual_url" in post:
-            normalized["visual_url"] = str(post["visual_url"])
+        _passthrough_str = [
+            "visual_type", "visual_url", "article_url", "article_title",
+            "document_title", "document_url", "video_thumbnail",
+        ]
+        for field in _passthrough_str:
+            if field in post:
+                normalized[field] = str(post[field])
+
         if "visual_urls" in post:
             normalized["visual_urls"] = list(post["visual_urls"])
         if "image_count" in post:
             normalized["image_count"] = int(post["image_count"])
+        if "page_count" in post:
+            normalized["page_count"] = int(post["page_count"])
+        if "video_duration" in post:
+            normalized["video_duration"] = float(post["video_duration"])
+        if "reactions_by_type" in post:
+            normalized["reactions_by_type"] = dict(post["reactions_by_type"])
 
         return normalized
 
@@ -299,14 +310,29 @@ class ProfileImporter:
 
         # Extract engagement metrics
         social_detail = raw.get("socialDetail", {}) or {}
-        likes = social_detail.get("totalSocialActivityCounts", {}).get("numLikes", 0)
-        comments = social_detail.get("totalSocialActivityCounts", {}).get("numComments", 0)
+        activity_counts = social_detail.get("totalSocialActivityCounts", {}) or {}
+        likes = activity_counts.get("numLikes", 0)
+        comments = activity_counts.get("numComments", 0)
+        shares = activity_counts.get("numShares", 0)
 
         # Try simpler paths if nested ones are empty
         if likes == 0:
             likes = raw.get("likes", raw.get("numLikes", 0))
         if comments == 0:
             comments = raw.get("comments", raw.get("numComments", 0))
+        if shares == 0:
+            shares = raw.get("shares", raw.get("numShares", 0))
+
+        # Extract reaction type breakdown (LIKE, EMPATHY, PRAISE, etc.)
+        reaction_types: Dict[str, int] = {}
+        reaction_counts = activity_counts.get("reactionTypeCounts", [])
+        if isinstance(reaction_counts, list):
+            for entry in reaction_counts:
+                if isinstance(entry, dict):
+                    rtype = entry.get("reactionType") or entry.get("type", "")
+                    rcount = entry.get("count", 0)
+                    if rtype:
+                        reaction_types[str(rtype)] = int(rcount)
 
         # Extract date
         date = ""
@@ -331,15 +357,28 @@ class ProfileImporter:
             "text": text,
             "likes": int(likes),
             "comments": int(comments),
+            "shares": int(shares),
             "date": date,
             "content_type": media_info["visual_type"] if media_info["visual_type"] != "none" else "text",
             "visual_type": media_info["visual_type"],
             "visual_url": media_info["visual_url"],
             "visual_urls": visual_urls,
             "image_count": len(visual_urls),
+            # Article metadata
+            "article_url": media_info["article_url"],
+            "article_title": media_info["article_title"],
+            # Document (carousel/PDF) metadata
+            "document_title": media_info["document_title"],
+            "document_url": media_info["document_url"],
+            "page_count": media_info["page_count"],
+            # Video metadata
+            "video_duration": media_info["video_duration"],
+            "video_thumbnail": media_info["video_thumbnail"],
         }
         if linkedin_post_id:
             result["linkedin_post_id"] = str(linkedin_post_id)
+        if reaction_types:
+            result["reactions_by_type"] = reaction_types
 
         return result
 
@@ -425,6 +464,29 @@ class ProfileImporter:
             if image_count is not None:
                 row["image_count"] = image_count
 
+            # Rich content metadata
+            _optional_str_fields = [
+                "article_url", "article_title", "document_title",
+                "document_url", "video_thumbnail",
+            ]
+            for field in _optional_str_fields:
+                val = post.get(field)
+                if val:
+                    row[field] = val
+
+            shares = post.get("shares")
+            if shares:
+                row["shares"] = int(shares)
+            page_count = post.get("page_count")
+            if page_count:
+                row["page_count"] = int(page_count)
+            video_duration = post.get("video_duration")
+            if video_duration:
+                row["video_duration"] = float(video_duration)
+            reactions_by_type = post.get("reactions_by_type")
+            if reactions_by_type:
+                row["reactions_by_type"] = reactions_by_type
+
             db_rows.append(row)
 
         if not db_rows:
@@ -471,52 +533,74 @@ class ProfileImporter:
     # ------------------------------------------------------------------
 
     def _extract_media_info(self, raw: Dict[str, Any]) -> Dict[str, Any]:
-        """Detect media type and extract image URLs from a raw Voyager post.
+        """Detect media type and extract rich metadata from a raw Voyager post.
 
         Iterates over the ``content`` dict keys looking for known component
-        type substrings (ImageComponent, VideoComponent, etc.).
-
-        Multi-image posts use the same ``ImageComponent`` with multiple
-        entries in the ``images`` array.
+        type substrings (ImageComponent, DocumentComponent, VideoComponent,
+        ArticleComponent).
 
         Args:
             raw: Raw post dict from the linkedin-api library.
 
         Returns:
-            Dict with ``visual_type`` (str), ``visual_url`` (str, first
-            image for backwards compat), and ``visual_urls`` (List[str],
-            all images).
+            Dict with ``visual_type``, ``visual_url``, ``visual_urls``,
+            and content-type-specific metadata (article_url, article_title,
+            document_title, document_url, page_count, video_duration,
+            video_thumbnail).
         """
-        visual_type = "none"
-        visual_urls: List[str] = []
+        result: Dict[str, Any] = {
+            "visual_type": "none",
+            "visual_url": "",
+            "visual_urls": [],
+            "article_url": "",
+            "article_title": "",
+            "document_title": "",
+            "document_url": "",
+            "page_count": 0,
+            "video_duration": 0.0,
+            "video_thumbnail": "",
+        }
 
         content = raw.get("content", {})
         if not isinstance(content, dict):
-            return {"visual_type": visual_type, "visual_url": "", "visual_urls": []}
+            return result
 
         for key, value in content.items():
             if "ImageComponent" in key:
-                visual_type = "image"
-                visual_urls = self._extract_image_urls(value)
+                result["visual_type"] = "image"
+                result["visual_urls"] = self._extract_image_urls(value)
+                break
+            elif "DocumentComponent" in key:
+                result["visual_type"] = "document"
+                doc_info = self._extract_document_info(value)
+                result["document_title"] = doc_info["document_title"]
+                result["document_url"] = doc_info["document_url"]
+                result["page_count"] = doc_info["page_count"]
+                result["visual_urls"] = doc_info["cover_images"]
                 break
             elif "VideoComponent" in key or "LinkedInVideoComponent" in key:
-                visual_type = "video"
+                result["visual_type"] = "video"
+                vid_info = self._extract_video_info(value)
+                result["video_duration"] = vid_info["video_duration"]
+                result["video_thumbnail"] = vid_info["video_thumbnail"]
+                if vid_info["video_thumbnail"]:
+                    result["visual_urls"] = [vid_info["video_thumbnail"]]
                 break
             elif "CarouselComponent" in key:
-                visual_type = "carousel"
+                result["visual_type"] = "carousel"
                 break
             elif "ArticleComponent" in key:
-                visual_type = "article"
-                url = self._extract_article_image_url(value)
-                if url:
-                    visual_urls = [url]
+                result["visual_type"] = "article"
+                art_info = self._extract_article_info(value)
+                result["article_url"] = art_info["article_url"]
+                result["article_title"] = art_info["article_title"]
+                img_url = self._extract_article_image_url(value)
+                if img_url:
+                    result["visual_urls"] = [img_url]
                 break
 
-        return {
-            "visual_type": visual_type,
-            "visual_url": visual_urls[0] if visual_urls else "",
-            "visual_urls": visual_urls,
-        }
+        result["visual_url"] = result["visual_urls"][0] if result["visual_urls"] else ""
+        return result
 
     @staticmethod
     def _extract_image_urls(image_component: Any) -> List[str]:
@@ -554,6 +638,148 @@ class ProfileImporter:
         except (IndexError, KeyError, TypeError):
             pass
         return urls
+
+    @staticmethod
+    def _extract_document_info(doc_component: Any) -> Dict[str, Any]:
+        """Extract metadata from a DocumentComponent (carousel/PDF).
+
+        The Voyager API nests document data under a ``document`` key::
+
+            {
+              "showDownloadCTA": false,
+              "document": {
+                "title": "...",
+                "totalPageCount": 19,
+                "transcribedDocumentUrl": "...",
+                "coverPages": {
+                  "pagesPerResolution": [
+                    {"width": 483, "imageUrls": ["...", "..."]},
+                    {"width": 1282, "imageUrls": ["...", "..."]}
+                  ]
+                }
+              }
+            }
+
+        Args:
+            doc_component: The DocumentComponent value from the content dict.
+
+        Returns:
+            Dict with ``document_title``, ``document_url``, ``page_count``,
+            and ``cover_images`` (list of cover page image URLs at highest
+            resolution).
+        """
+        info: Dict[str, Any] = {
+            "document_title": "",
+            "document_url": "",
+            "page_count": 0,
+            "cover_images": [],
+        }
+        try:
+            if not isinstance(doc_component, dict):
+                return info
+            # Metadata lives under the "document" key
+            doc = doc_component.get("document", doc_component)
+            if not isinstance(doc, dict):
+                return info
+            info["document_title"] = str(doc.get("title", "") or "")
+            info["page_count"] = int(doc.get("totalPageCount", 0) or 0)
+            info["document_url"] = str(
+                doc.get("transcribedDocumentUrl", "") or ""
+            )
+            # Cover pages: pick highest resolution from pagesPerResolution
+            cover_pages = doc.get("coverPages", {})
+            if isinstance(cover_pages, dict):
+                resolutions = cover_pages.get("pagesPerResolution", [])
+                if isinstance(resolutions, list) and resolutions:
+                    best_res = max(
+                        resolutions, key=lambda r: r.get("width", 0)
+                    )
+                    image_urls = best_res.get("imageUrls", [])
+                    if isinstance(image_urls, list):
+                        info["cover_images"] = [
+                            u for u in image_urls if isinstance(u, str) and u
+                        ]
+        except (IndexError, KeyError, TypeError, ValueError):
+            pass
+        return info
+
+    @staticmethod
+    def _extract_video_info(video_component: Any) -> Dict[str, Any]:
+        """Extract metadata from a VideoComponent / LinkedInVideoComponent.
+
+        The thumbnail structure uses ``rootUrl`` + ``artifacts`` directly
+        (no ``vectorImage`` wrapper)::
+
+            "thumbnail": {
+              "rootUrl": "https://media.licdn.com/.../videocover-",
+              "artifacts": [
+                {"width": 1314, "fileIdentifyingUrlPathSegment": "high/..."},
+                {"width": 656, "fileIdentifyingUrlPathSegment": "low/..."}
+              ]
+            }
+
+        Args:
+            video_component: The VideoComponent value from the content dict.
+
+        Returns:
+            Dict with ``video_duration`` (float, raw API value) and
+            ``video_thumbnail`` (str URL at highest resolution).
+        """
+        info: Dict[str, Any] = {
+            "video_duration": 0.0,
+            "video_thumbnail": "",
+        }
+        try:
+            if not isinstance(video_component, dict):
+                return info
+            meta = video_component.get("videoPlayMetadata", video_component)
+            if not isinstance(meta, dict):
+                return info
+            info["video_duration"] = float(meta.get("duration", 0) or 0)
+            # Thumbnail: rootUrl + artifacts (direct, not nested under vectorImage)
+            thumb = meta.get("thumbnail", {})
+            if isinstance(thumb, dict):
+                root_url = thumb.get("rootUrl", "")
+                artifacts = thumb.get("artifacts", [])
+                if root_url and isinstance(artifacts, list) and artifacts:
+                    best = max(artifacts, key=lambda a: a.get("width", 0))
+                    segment = best.get("fileIdentifyingUrlPathSegment", "")
+                    if segment:
+                        info["video_thumbnail"] = root_url + segment
+        except (IndexError, KeyError, TypeError, ValueError):
+            pass
+        return info
+
+    @staticmethod
+    def _extract_article_info(article_component: Any) -> Dict[str, Any]:
+        """Extract URL and title from an ArticleComponent.
+
+        Args:
+            article_component: The ArticleComponent value from content dict.
+
+        Returns:
+            Dict with ``article_url`` and ``article_title``.
+        """
+        info: Dict[str, Any] = {
+            "article_url": "",
+            "article_title": "",
+        }
+        try:
+            if not isinstance(article_component, dict):
+                return info
+            # Article URL from navigationContext
+            nav = article_component.get("navigationContext", {})
+            if isinstance(nav, dict):
+                info["article_url"] = str(nav.get("actionTarget", "") or "")
+            # Title
+            title_obj = article_component.get("title", {})
+            if isinstance(title_obj, dict):
+                info["article_title"] = str(title_obj.get("text", "") or "")
+            elif isinstance(title_obj, str):
+                info["article_title"] = title_obj
+        except (IndexError, KeyError, TypeError):
+            pass
+        return info
 
     @staticmethod
     def _extract_article_image_url(article_component: Any) -> str:
