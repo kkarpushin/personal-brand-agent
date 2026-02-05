@@ -224,6 +224,73 @@ class TelegramNotifier:
     # Convenience aliases
     # ------------------------------------------------------------------
 
+    async def send_post_preview(
+        self,
+        run_id: str,
+        post_text: str,
+        image_path: Optional[str] = None,
+        qc_score: Optional[float] = None,
+        content_type: Optional[str] = None,
+    ) -> None:
+        """Send a post preview with image and Approve/Reject inline buttons.
+
+        Args:
+            run_id: Pipeline run ID (encoded in callback data).
+            post_text: The generated post text.
+            image_path: Optional local path to the generated image.
+            qc_score: QC score for display.
+            content_type: Content type label for display.
+        """
+        if not TELEGRAM_AVAILABLE:
+            logger.warning("[TELEGRAM] python-telegram-bot not installed. Preview not sent.")
+            return
+
+        # Send the image first (if available)
+        if image_path:
+            try:
+                with open(image_path, "rb") as photo:
+                    await self._bot.send_photo(
+                        chat_id=self._chat_id,
+                        photo=photo,
+                    )
+            except Exception:
+                logger.exception("[TELEGRAM] Failed to send preview image")
+
+        # Build caption with metadata
+        header_parts = ["Post Preview"]
+        if content_type:
+            header_parts.append(f"Type: {content_type}")
+        if qc_score is not None:
+            header_parts.append(f"QC: {qc_score:.1f}/10")
+        header = " | ".join(header_parts)
+
+        preview_text = f"{header}\n{'=' * 40}\n\n{post_text}"
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "Approve", callback_data=f"approve:{run_id}"
+                    ),
+                    InlineKeyboardButton(
+                        "Reject", callback_data=f"reject:{run_id}"
+                    ),
+                ]
+            ]
+        )
+        try:
+            await self._bot.send_message(
+                chat_id=self._chat_id,
+                text=_truncate(preview_text),
+                reply_markup=keyboard,
+            )
+        except Exception:
+            logger.exception("[TELEGRAM] Failed to send post preview")
+
+    # ------------------------------------------------------------------
+    # Convenience aliases
+    # ------------------------------------------------------------------
+
     async def notify(self, message: str) -> None:
         """Alias for :meth:`send` on the ``"telegram"`` channel."""
         await self.send(message, channel="telegram")
@@ -359,13 +426,13 @@ class TelegramBot:
         # Pattern-based handlers for /approve_{id} and /reject_{id}
         app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/approve_\S+") & filters.ChatType.PRIVATE,
+                filters.Regex(r"^/approve_\S+"),
                 self._handle_approval,
             )
         )
         app.add_handler(
             MessageHandler(
-                filters.Regex(r"^/reject_\S+") & filters.ChatType.PRIVATE,
+                filters.Regex(r"^/reject_\S+"),
                 self._handle_rejection,
             )
         )
@@ -386,7 +453,7 @@ class TelegramBot:
         context: Any,
     ) -> None:
         """Handle ``/start`` -- send welcome message."""
-        if not self._is_authorized(update.effective_user.id):
+        if not self._is_authorized(update.effective_chat.id):
             return
 
         welcome = (
@@ -406,7 +473,7 @@ class TelegramBot:
         context: Any,
     ) -> None:
         """Handle ``/status`` -- show pipeline status summary."""
-        if not self._is_authorized(update.effective_user.id):
+        if not self._is_authorized(update.effective_chat.id):
             return
 
         now = utc_now()
@@ -425,7 +492,7 @@ class TelegramBot:
         context: Any,
     ) -> None:
         """Handle ``/queue`` -- show pending approvals queue."""
-        if not self._is_authorized(update.effective_user.id):
+        if not self._is_authorized(update.effective_chat.id):
             return
 
         if not self._pending_approvals:
@@ -457,7 +524,7 @@ class TelegramBot:
             /autonomy         -- show current level
             /autonomy 3       -- set level to 3
         """
-        if not self._is_authorized(update.effective_user.id):
+        if not self._is_authorized(update.effective_chat.id):
             return
 
         args = context.args if context.args else []
@@ -516,7 +583,7 @@ class TelegramBot:
         Parses the item ID from the command text, invokes the ``on_approve``
         callback, and replies with confirmation.
         """
-        if not self._is_authorized(update.effective_user.id):
+        if not self._is_authorized(update.effective_chat.id):
             return
 
         text = update.message.text.strip()
@@ -570,7 +637,7 @@ class TelegramBot:
         Parses the item ID from the command text, invokes the ``on_reject``
         callback, and replies with confirmation.
         """
-        if not self._is_authorized(update.effective_user.id):
+        if not self._is_authorized(update.effective_chat.id):
             return
 
         text = update.message.text.strip()
@@ -629,23 +696,26 @@ class TelegramBot:
         if query is None:
             return
 
-        if not self._is_authorized(query.from_user.id):
+        if not self._is_authorized(update.effective_chat.id):
             await query.answer("Unauthorized.", show_alert=True)
             return
 
         await query.answer()  # Acknowledge to remove "loading" indicator
 
-        data = query.data
-        if data == "approve":
+        data = query.data or ""
+
+        # Parse callback data: "approve:{run_id}" or plain "approve"
+        if data.startswith("approve"):
+            item_id = data.split(":", 1)[1] if ":" in data else (
+                str(query.message.message_id) if query.message else "unknown"
+            )
             logger.info(
-                "[TELEGRAM] Inline approval from user %s",
+                "[TELEGRAM] Inline approval for '%s' from user %s",
+                item_id,
                 query.from_user.id,
             )
             if self._on_approve:
                 try:
-                    # For inline approvals without a specific ID, use a
-                    # generic identifier derived from the message.
-                    item_id = str(query.message.message_id) if query.message else "unknown"
                     await self._on_approve(item_id)
                     await query.edit_message_text(
                         text=f"{query.message.text}\n\n-- APPROVED --"
@@ -660,14 +730,17 @@ class TelegramBot:
                     text=f"{query.message.text}\n\n-- APPROVED (no callback) --"
                 )
 
-        elif data == "reject":
+        elif data.startswith("reject"):
+            item_id = data.split(":", 1)[1] if ":" in data else (
+                str(query.message.message_id) if query.message else "unknown"
+            )
             logger.info(
-                "[TELEGRAM] Inline rejection from user %s",
+                "[TELEGRAM] Inline rejection for '%s' from user %s",
+                item_id,
                 query.from_user.id,
             )
             if self._on_reject:
                 try:
-                    item_id = str(query.message.message_id) if query.message else "unknown"
                     await self._on_reject(item_id)
                     await query.edit_message_text(
                         text=f"{query.message.text}\n\n-- REJECTED --"
