@@ -30,6 +30,8 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -334,12 +336,6 @@ class ProfileImporter:
                     if rtype:
                         reaction_types[str(rtype)] = int(rcount)
 
-        # Extract date
-        date = ""
-        created_at = raw.get("createdAt", raw.get("publishedAt", ""))
-        if created_at:
-            date = str(created_at)
-
         # Extract LinkedIn URN as stable post identifier
         linkedin_post_id = (
             raw.get("entityUrn")
@@ -347,6 +343,19 @@ class ProfileImporter:
             or raw.get("dashEntityUrn")
             or ""
         )
+
+        # Extract date: try explicit fields first, fall back to snowflake ID
+        date = ""
+        created_at = raw.get("createdAt", raw.get("publishedAt", ""))
+        if created_at:
+            date = str(created_at)
+        else:
+            # Voyager often omits createdAt; extract from activity snowflake ID
+            activity_urn = (
+                raw.get("updateMetadata", {}).get("urn", "")
+                or linkedin_post_id
+            )
+            date = self._extract_date_from_urn(activity_urn)
 
         # Extract media info from the raw Voyager response
         media_info = self._extract_media_info(raw)
@@ -946,6 +955,35 @@ class ProfileImporter:
     # ------------------------------------------------------------------
     # PRIVATE HELPERS
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_date_from_urn(urn: str) -> str:
+        """Extract an ISO date string from a LinkedIn activity snowflake ID.
+
+        LinkedIn activity IDs encode a millisecond timestamp in the upper
+        bits (``activity_id >> 22``).  This gives an accurate publication
+        date even when the API omits ``createdAt``.
+
+        Args:
+            urn: A LinkedIn URN string containing ``activity:NNNN``.
+
+        Returns:
+            ISO 8601 timestamp string (e.g. ``"2023-09-19T18:30:32+00:00"``),
+            or empty string if the URN cannot be parsed.
+        """
+        match = re.search(r"activity:(\d+)", urn)
+        if not match:
+            return ""
+        try:
+            activity_id = int(match.group(1))
+            ts_ms = activity_id >> 22
+            # Sanity check: should be between 2010 and 2030
+            if ts_ms < 1_262_304_000_000 or ts_ms > 1_893_456_000_000:
+                return ""
+            dt = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+            return dt.isoformat()
+        except (ValueError, OverflowError, OSError):
+            return ""
 
     @staticmethod
     def _extract_public_id(profile_url: str) -> str:

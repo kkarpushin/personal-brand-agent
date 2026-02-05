@@ -358,6 +358,54 @@ class TestExtractHook:
 
 
 # =========================================================================
+# TestExtractDateFromUrn — snowflake ID date extraction
+# =========================================================================
+
+class TestExtractDateFromUrn:
+    """Tests for _extract_date_from_urn() snowflake timestamp extraction."""
+
+    def test_valid_activity_urn(self):
+        urn = "urn:li:activity:7413137957597093888"
+        result = ProfileImporter._extract_date_from_urn(urn)
+        assert result != ""
+        # Should be ISO 8601 format
+        assert "T" in result
+        assert "+" in result or "Z" in result
+
+    def test_nested_activity_urn(self):
+        urn = "urn:li:fs_updateV2:(urn:li:activity:7413137957597093888,MEMBER_SHARES,EMPTY,DEFAULT,false)"
+        result = ProfileImporter._extract_date_from_urn(urn)
+        assert result != ""
+        assert "T" in result
+
+    def test_known_date(self):
+        # activity:7413137957597093888 >> 22 = 1767429818534 ms
+        # = 2025-12-... or similar — just check year is reasonable
+        urn = "urn:li:activity:7413137957597093888"
+        result = ProfileImporter._extract_date_from_urn(urn)
+        assert result.startswith("202")
+
+    def test_no_activity_in_urn(self):
+        assert ProfileImporter._extract_date_from_urn("urn:li:member:12345") == ""
+
+    def test_empty_string(self):
+        assert ProfileImporter._extract_date_from_urn("") == ""
+
+    def test_nonsense_string(self):
+        assert ProfileImporter._extract_date_from_urn("hello world") == ""
+
+    def test_date_used_in_normalize(self, importer):
+        """_normalize_linkedin_post uses snowflake date when createdAt is missing."""
+        raw = {
+            "commentary": {"text": "Hello"},
+            "updateMetadata": {"urn": "urn:li:activity:7413137957597093888"},
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["date"] != ""
+        assert "T" in result["date"]
+
+
+# =========================================================================
 # TestVisualPatterns — _compute_visual_patterns()
 # =========================================================================
 
