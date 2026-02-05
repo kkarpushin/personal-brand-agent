@@ -102,20 +102,44 @@ class ProfileImporter:
 
         import asyncio
 
-        def _fetch_posts() -> List[Dict[str, Any]]:
+        def _resolve_urn_id() -> str:
+            """Resolve public_id to a URN ID for get_profile_posts.
+
+            LinkedIn deprecated the ``/identity/profiles/{id}/profileView``
+            endpoint (returns 410), so ``get_profile_posts(public_id=...)``
+            fails.  We resolve the URN via ``/me`` (own profile) or fall
+            back to passing public_id directly.
+            """
             try:
-                return api.get_profile_posts(public_id, post_count=limit)
+                res = api._fetch("/me")
+                data = res.json()
+                mini = data.get("miniProfile", {})
+                if mini.get("publicIdentifier") == public_id:
+                    urn = mini.get("entityUrn", "")
+                    # entityUrn format: "urn:li:fs_miniProfile:ACoAAA..."
+                    # We need just the ID part after the last colon
+                    if urn:
+                        return urn.split(":")[-1]
             except Exception:
-                # Fallback: some versions use a different method signature
-                try:
-                    return api.get_profile_posts(public_id)
-                except Exception as exc:
-                    logger.error(
-                        "Failed to fetch posts for '%s': %s",
-                        public_id,
-                        exc,
-                    )
-                    raise
+                logger.debug("Failed to resolve URN via /me", exc_info=True)
+            return ""
+
+        def _fetch_posts() -> List[Dict[str, Any]]:
+            # Try to resolve URN to bypass broken get_profile endpoint
+            urn_id = _resolve_urn_id()
+            if urn_id:
+                logger.info("Resolved URN ID for '%s', fetching posts", public_id)
+                return list(api.get_profile_posts(urn_id=urn_id, post_count=limit))
+
+            # Fall back to public_id (may work on older library versions)
+            logger.info("Using public_id '%s' directly", public_id)
+            try:
+                return list(api.get_profile_posts(public_id, post_count=limit))
+            except Exception as exc:
+                logger.error(
+                    "Failed to fetch posts for '%s': %s", public_id, exc,
+                )
+                raise
 
         raw_posts: List[Dict[str, Any]] = await asyncio.to_thread(_fetch_posts)
 
@@ -240,11 +264,18 @@ class ProfileImporter:
         Returns:
             Normalised post dict.
         """
-        # Extract text from various Voyager response structures
+        # Extract text from various Voyager response structures.
+        # The Voyager v2 API nests text as:
+        #   commentary -> text -> {textDirection, text}
+        # while older versions use commentary -> text (str).
         text = ""
         commentary = raw.get("commentary", {})
         if isinstance(commentary, dict):
-            text = commentary.get("text", "")
+            raw_text = commentary.get("text", "")
+            if isinstance(raw_text, dict):
+                text = raw_text.get("text", "")
+            else:
+                text = raw_text
         elif isinstance(commentary, str):
             text = commentary
 
@@ -348,7 +379,8 @@ class ProfileImporter:
             row: Dict[str, Any] = {
                 "linkedin_post_id": lid,
                 "text_content": text,
-                "content_type": "imported",
+                "content_type": "community_content",
+                "template_used": "imported",
                 "hook": first_line,
             }
 

@@ -391,9 +391,23 @@ class AuthorProfileAgent:
                 "Pass a SupabaseDB instance to AuthorProfileAgent(db=...)."
             )
 
-        profile_dict = asdict(profile)
-        profile_dict["created_at"] = profile.created_at.isoformat()
-        profile_dict["last_updated"] = profile.last_updated.isoformat()
+        # Map AuthorVoiceProfile fields to the actual DB column names.
+        profile_dict = {
+            "name": profile.author_name,
+            "title": profile.author_role,
+            "expertise_areas": profile.expertise_areas,
+            "signature_phrases": profile.characteristic_phrases,
+            "avoided_topics": profile.topics_to_avoid,
+            "tone": f"formality_{profile.formality_level:.1f}",
+            "vocabulary_level": profile.sentence_length_preference,
+            "emoji_usage": profile.emoji_usage,
+            "preferred_post_length": str(profile.typical_post_length),
+            "preferred_content_types": profile.preferred_cta_styles,
+            "topics_of_interest": profile.favorite_topics,
+            "posting_frequency": profile.posting_frequency,
+            "best_posting_times": profile.best_posting_times,
+            "updated_at": profile.last_updated.isoformat(),
+        }
 
         await self.db.save_author_profile(profile_dict)
 
@@ -430,14 +444,34 @@ class AuthorProfileAgent:
             logger.warning("No profile found for '%s'", author_name)
             return None
 
-        # Verify we got the right author (single-author system, but be safe)
-        if data.get("author_name") != author_name:
+        # Verify we got the right author (single-author system, but be safe).
+        # DB column is "name", not "author_name".
+        db_name = data.get("name", data.get("author_name"))
+        if db_name != author_name:
             logger.warning(
-                "Profile author_name mismatch: expected '%s', got '%s'",
+                "Profile name mismatch: expected '%s', got '%s'",
                 author_name,
-                data.get("author_name"),
+                db_name,
             )
             return None
+
+        # Map DB columns back to AuthorVoiceProfile field names
+        data["author_name"] = data.pop("name", author_name)
+        if "title" in data:
+            data.setdefault("author_role", data.pop("title", ""))
+        if "signature_phrases" in data:
+            data.setdefault("characteristic_phrases", data.pop("signature_phrases", []))
+        if "topics_of_interest" in data:
+            data.setdefault("favorite_topics", data.pop("topics_of_interest", []))
+        if "avoided_topics" in data:
+            data.setdefault("topics_to_avoid", data.pop("avoided_topics", []))
+        if "preferred_post_length" in data:
+            try:
+                data.setdefault("typical_post_length", int(data.pop("preferred_post_length", 1200)))
+            except (ValueError, TypeError):
+                data.setdefault("typical_post_length", 1200)
+        if "updated_at" in data:
+            data.setdefault("last_updated", data.pop("updated_at"))
 
         return self._dict_to_profile(data)
 

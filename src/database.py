@@ -1356,16 +1356,42 @@ class SupabaseDB:
         """
         if not profile:
             raise ValidationError("profile cannot be None or empty")
-        if "author_name" not in profile or not profile["author_name"]:
-            raise ValidationError("profile must have 'author_name'")
 
+        # The DB column is "name", not "author_name".  Accept either.
+        if "author_name" in profile and "name" not in profile:
+            profile["name"] = profile.pop("author_name")
+        if "name" not in profile or not profile["name"]:
+            raise ValidationError("profile must have 'name' (or 'author_name')")
+
+        # Check if a profile with this name already exists.
+        name = profile["name"]
+        existing = await (
+            self.client.table("author_profiles")
+            .select("id")
+            .eq("name", name)
+            .limit(1)
+            .execute()
+        )
+
+        if existing.data:
+            # Update existing profile
+            profile_id = existing.data[0]["id"]
+            await (
+                self.client.table("author_profiles")
+                .update(profile)
+                .eq("id", profile_id)
+                .execute()
+            )
+            return profile_id
+
+        # Insert new profile
         result = await (
             self.client.table("author_profiles")
-            .upsert(profile, on_conflict="author_name")
+            .insert(profile)
             .execute()
         )
         if not result.data:
-            raise DatabaseError("Upsert succeeded but returned no data")
+            raise DatabaseError("Insert succeeded but returned no data")
         return result.data[0]["id"]
 
     async def get_author_profile(self) -> Optional[Dict[str, Any]]:
@@ -1380,7 +1406,7 @@ class SupabaseDB:
         result = await (
             self.client.table("author_profiles")
             .select("*")
-            .order("last_updated", desc=True)
+            .order("updated_at", desc=True)
             .limit(1)
             .execute()
         )
