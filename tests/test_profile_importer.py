@@ -309,6 +309,55 @@ class TestNormalizePost:
 
 
 # =========================================================================
+# TestExtractHook — _extract_hook()
+# =========================================================================
+
+class TestExtractHook:
+    """Tests for _extract_hook() LinkedIn hook extraction."""
+
+    def test_hook_before_blank_line(self):
+        text = "Bold statement 🔥\n\nBody text here that continues..."
+        assert ProfileImporter._extract_hook(text) == "Bold statement 🔥"
+
+    def test_multiline_hook(self):
+        text = "Line one\nLine two\n\nBody paragraph."
+        assert ProfileImporter._extract_hook(text) == "Line one\nLine two"
+
+    def test_long_paragraph_truncated_at_word(self):
+        text = "Word " * 100  # 500 chars, no \n\n
+        result = ProfileImporter._extract_hook(text)
+        assert len(result) <= 301  # 300 + ellipsis
+        assert result.endswith("…")
+        assert "  " not in result  # didn't cut mid-word
+
+    def test_short_first_block_merges_next(self):
+        text = "🚀\n\nThe real hook starts here."
+        result = ProfileImporter._extract_hook(text)
+        assert "The real hook starts here." in result
+
+    def test_empty_text(self):
+        assert ProfileImporter._extract_hook("") == ""
+        assert ProfileImporter._extract_hook("   ") == ""
+
+    def test_no_blank_line(self):
+        text = "Single paragraph without any double newlines, just regular text."
+        assert ProfileImporter._extract_hook(text) == text
+
+    def test_real_linkedin_post(self):
+        text = (
+            "Why did I stop giving my team specific goals? 🎯\n\n"
+            "As a leader, my job isn't to micromanage — it's to empower my team. "
+            "That's why I decided to stop giving specific goals and instead "
+            "focus on creating an environment where my team could thrive."
+        )
+        assert ProfileImporter._extract_hook(text) == "Why did I stop giving my team specific goals? 🎯"
+
+    def test_preserves_exact_text_no_truncation(self):
+        text = "Perfection is overrated 💯\n\nFor years, I believed..."
+        assert ProfileImporter._extract_hook(text) == "Perfection is overrated 💯"
+
+
+# =========================================================================
 # TestVisualPatterns — _compute_visual_patterns()
 # =========================================================================
 

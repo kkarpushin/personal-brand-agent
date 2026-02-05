@@ -397,14 +397,13 @@ class ProfileImporter:
                 continue
 
             text = post.get("text", "")
-            first_line = text.split("\n")[0].strip()[:210] if text else ""
 
             row: Dict[str, Any] = {
                 "linkedin_post_id": lid,
                 "text_content": text,
                 "content_type": "community_content",
                 "template_used": "imported",
-                "hook": first_line,
+                "hook": self._extract_hook(text),
             }
 
             # Map publication date if available
@@ -673,6 +672,50 @@ class ProfileImporter:
             post["image_count"] = len(local_paths)
 
         return posts
+
+    # ------------------------------------------------------------------
+    # HOOK EXTRACTION
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_hook(text: str, max_length: int = 300) -> str:
+        """Extract the hook (above-the-fold text) from a LinkedIn post.
+
+        LinkedIn authors use a blank line (``\\n\\n``) to separate the
+        attention-grabbing hook from the body.  This method takes the
+        text before the first blank line, capped at *max_length*
+        characters on a word boundary.
+
+        Args:
+            text: Full post text.
+            max_length: Maximum hook length in characters (default 300).
+
+        Returns:
+            The extracted hook string.
+        """
+        if not text or not text.strip():
+            return ""
+
+        # Split on double newline — the author's intentional boundary
+        paragraphs = text.split("\n\n")
+        hook = paragraphs[0].strip()
+
+        # If the first block is very short (e.g. just an emoji or a tag),
+        # include the next paragraph too
+        if len(hook) < 10 and len(paragraphs) > 1:
+            hook = hook + "\n" + paragraphs[1].strip()
+
+        # Cap at max_length on a word boundary
+        if len(hook) > max_length:
+            truncated = hook[:max_length]
+            # Find the last space to avoid cutting mid-word
+            last_space = truncated.rfind(" ")
+            if last_space > max_length // 2:
+                hook = truncated[:last_space] + "…"
+            else:
+                hook = truncated + "…"
+
+        return hook
 
     # ------------------------------------------------------------------
     # PRIVATE HELPERS
