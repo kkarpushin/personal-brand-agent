@@ -2,11 +2,14 @@
 Async LinkedIn API client wrapper.
 
 Wraps the ``tomquirk/linkedin-api`` library (Voyager API) with
-``asyncio.to_thread`` to provide an async interface.  Supports 2FA via
-TOTP secrets.
+``asyncio.to_thread`` to provide an async interface.
 
-The orchestrator and post-analytics agents use this client to publish
-posts, retrieve engagement metrics, and collect comments/reactions.
+Authentication strategy (in order):
+1. Reuse cached cookies from ``data/linkedin_cookies.json`` (instant).
+2. If no cookies or expired, launch headless Playwright browser to
+   log in with email + password, handle 2FA via TOTP, extract cookies,
+   and cache them to disk.
+3. Pass cookies to ``linkedin-api`` for all subsequent Voyager API calls.
 
 Fail-fast philosophy: ``LinkedInAPIError``, ``LinkedInRateLimitError``,
 and ``LinkedInSessionExpiredError`` are raised for corresponding failure
@@ -14,8 +17,11 @@ modes.  Transient errors are retried with exponential backoff.
 """
 
 import asyncio
+import json
 import logging
 import os
+import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from src.exceptions import (
@@ -27,12 +33,233 @@ from src.utils import with_retry
 
 logger = logging.getLogger(__name__)
 
+COOKIES_PATH = Path("data/linkedin_cookies.json")
+COOKIE_MAX_AGE = 3600 * 24 * 7  # 7 days
+
+
+# ======================================================================
+# COOKIE MANAGEMENT
+# ======================================================================
+
+
+def _save_cookies(cookies: List[Dict[str, Any]]) -> None:
+    """Save browser cookies to disk."""
+    COOKIES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"cookies": cookies, "saved_at": time.time()}
+    COOKIES_PATH.write_text(json.dumps(payload), encoding="utf-8")
+    logger.info("LinkedIn cookies saved to %s", COOKIES_PATH)
+
+
+def _load_cookies() -> Optional[List[Dict[str, Any]]]:
+    """Load cached cookies from disk. Returns None if missing or expired."""
+    if not COOKIES_PATH.exists():
+        return None
+    try:
+        payload = json.loads(COOKIES_PATH.read_text(encoding="utf-8"))
+        saved_at = payload.get("saved_at", 0)
+        if time.time() - saved_at > COOKIE_MAX_AGE:
+            logger.info("LinkedIn cookies expired (age %.0fh)", (time.time() - saved_at) / 3600)
+            return None
+        cookies = payload.get("cookies", [])
+        # Check that li_at is present (authenticated session)
+        if not any(c.get("name") == "li_at" for c in cookies):
+            return None
+        return cookies
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+def _cookies_to_dict(cookies: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Convert list of cookie dicts to {name: value} mapping."""
+    return {c["name"]: c["value"] for c in cookies if "name" in c and "value" in c}
+
+
+# ======================================================================
+# PLAYWRIGHT LOGIN WITH 2FA
+# ======================================================================
+
+
+def _browser_login(email: str, password: str, totp_secret: str) -> List[Dict[str, Any]]:
+    """Log in to LinkedIn via headless browser, handling 2FA with TOTP.
+
+    Returns:
+        List of cookie dicts from the authenticated session.
+
+    Raises:
+        LinkedInSessionExpiredError: If login fails at any step.
+    """
+    from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
+
+    logger.info("Starting Playwright browser login for %s", email)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/131.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+        )
+        page = context.new_page()
+
+        try:
+            # --- Step 1: Go to login page ---
+            page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
+            page.wait_for_selector("#username", timeout=15000)
+
+            # --- Step 2: Fill credentials ---
+            page.fill("#username", email)
+            page.fill("#password", password)
+            page.click("button[type='submit']")
+
+            # --- Step 3: Wait for navigation (may land on feed or 2FA) ---
+            page.wait_for_load_state("domcontentloaded", timeout=15000)
+            _wait_for_stable_url(page, timeout=10000)
+
+            current_url = page.url
+
+            # --- Step 4: Handle 2FA challenge if present ---
+            if "checkpoint" in current_url or "challenge" in current_url:
+                logger.info("2FA challenge detected at %s", current_url)
+
+                if not totp_secret:
+                    raise LinkedInSessionExpiredError(
+                        "2FA challenge but no TOTP_SECRET configured"
+                    )
+
+                import pyotp
+                code = pyotp.TOTP(totp_secret).now()
+                logger.info("Generated TOTP code: %s***", code[:3])
+
+                # Find and fill the PIN input
+                pin_selector = _find_pin_input(page)
+                if not pin_selector:
+                    raise LinkedInSessionExpiredError(
+                        "Could not find PIN input on challenge page"
+                    )
+
+                page.fill(pin_selector, code)
+
+                # Submit the code
+                _click_submit(page)
+                page.wait_for_load_state("domcontentloaded", timeout=15000)
+                _wait_for_stable_url(page, timeout=10000)
+
+                current_url = page.url
+                logger.info("Post-2FA URL: %s", current_url)
+
+            # --- Step 5: Verify we're authenticated ---
+            if "feed" in current_url or "mynetwork" in current_url or "in/" in current_url:
+                logger.info("LinkedIn login successful (landed on %s)", current_url)
+            else:
+                # One more check: see if li_at cookie exists
+                cookies = context.cookies()
+                if not any(c["name"] == "li_at" for c in cookies):
+                    raise LinkedInSessionExpiredError(
+                        f"Login did not complete. Final URL: {current_url}"
+                    )
+
+            # --- Step 6: Extract and return cookies ---
+            cookies = context.cookies()
+            logger.info(
+                "Extracted %d cookies (li_at=%s)",
+                len(cookies),
+                "present" if any(c["name"] == "li_at" for c in cookies) else "MISSING",
+            )
+            return cookies
+
+        except PwTimeout as exc:
+            raise LinkedInSessionExpiredError(
+                f"Browser login timed out: {exc}"
+            ) from exc
+        except LinkedInSessionExpiredError:
+            raise
+        except Exception as exc:
+            raise LinkedInSessionExpiredError(
+                f"Browser login failed: {exc}"
+            ) from exc
+        finally:
+            browser.close()
+
+
+def _find_pin_input(page: Any) -> Optional[str]:
+    """Try multiple selectors to locate the PIN/code input field."""
+    selectors = [
+        "input[name='pin']",
+        "input#input__phone_verification_pin",
+        "input#input__email_verification_pin",
+        "input[name='challengeData.pin']",
+        "input[type='text'][name*='pin']",
+        "input[type='tel']",
+        "input[aria-label*='code']",
+        "input[aria-label*='Code']",
+        "input[placeholder*='code']",
+        "input[placeholder*='Code']",
+        "input[id*='verification']",
+        "input[id*='pin']",
+    ]
+    for sel in selectors:
+        try:
+            if page.locator(sel).count() > 0:
+                logger.debug("Found PIN input: %s", sel)
+                return sel
+        except Exception:
+            continue
+    return None
+
+
+def _click_submit(page: Any) -> None:
+    """Click the submit/verify button on a challenge page."""
+    selectors = [
+        "button[type='submit']",
+        "button#two-step-submit-button",
+        "button[data-litms-control-urn*='submit']",
+        "button:has-text('Verify')",
+        "button:has-text('Submit')",
+        "button:has-text('Next')",
+    ]
+    for sel in selectors:
+        try:
+            if page.locator(sel).count() > 0:
+                page.click(sel)
+                return
+        except Exception:
+            continue
+    # Fallback: press Enter
+    page.keyboard.press("Enter")
+
+
+def _wait_for_stable_url(page: Any, timeout: int = 10000) -> None:
+    """Wait until the URL stops changing (page redirects have settled)."""
+    start = time.time()
+    last_url = page.url
+    stable_since = start
+    while (time.time() - start) * 1000 < timeout:
+        time.sleep(0.5)
+        current = page.url
+        if current != last_url:
+            last_url = current
+            stable_since = time.time()
+        elif (time.time() - stable_since) > 2.0:
+            return
+    return
+
+
+# ======================================================================
+# MAIN CLIENT
+# ======================================================================
+
 
 class LinkedInClient:
     """Async wrapper around the ``tomquirk/linkedin-api`` Voyager client.
 
-    Lazy-initialises the underlying synchronous ``Linkedin`` client on
-    first use so that import-time side effects are avoided.
+    Authentication flow:
+    1. Try cached cookies from ``data/linkedin_cookies.json``.
+    2. If missing or expired, run Playwright headless login with 2FA.
+    3. Cache new cookies for 7 days.
+    4. Pass cookies to ``linkedin-api`` for Voyager API calls.
 
     Args:
         email: LinkedIn account email.  Falls back to ``LINKEDIN_EMAIL``.
@@ -66,7 +293,11 @@ class LinkedInClient:
     # ------------------------------------------------------------------
 
     async def _get_api(self) -> Any:
-        """Lazy-init the ``linkedin-api`` client with optional 2FA.
+        """Lazy-init the ``linkedin-api`` client using cookies.
+
+        Tries cached cookies first.  If unavailable, performs a full
+        Playwright-based login (with 2FA if configured) and caches the
+        resulting cookies.
 
         Returns:
             An authenticated ``Linkedin`` client instance.
@@ -79,25 +310,38 @@ class LinkedInClient:
 
         from linkedin_api import Linkedin  # type: ignore[import-untyped]
 
-        # Generate TOTP code if secret is configured
-        totp_code: Optional[str] = None
-        if self.totp_secret:
-            import pyotp  # type: ignore[import-untyped]
+        # 1. Try cached cookies
+        cookies = _load_cookies()
+        if cookies:
+            logger.info("Using cached LinkedIn cookies")
+        else:
+            # 2. Browser login
+            cookies = await asyncio.to_thread(
+                _browser_login, self.email, self.password, self.totp_secret
+            )
+            _save_cookies(cookies)
 
-            totp_code = pyotp.TOTP(self.totp_secret).now()
+        # 3. Build CookieJar for linkedin-api
+        from requests.cookies import RequestsCookieJar
 
-        def _login() -> Any:
+        jar = RequestsCookieJar()
+        for c in cookies:
+            jar.set(
+                c["name"],
+                c["value"],
+                domain=c.get("domain", ".linkedin.com"),
+                path=c.get("path", "/"),
+            )
+
+        def _init_with_cookies() -> Any:
             try:
-                kwargs: Dict[str, Any] = {}
-                if totp_code:
-                    kwargs["two_factor_code"] = totp_code
-                return Linkedin(self.email, self.password, **kwargs)
+                return Linkedin("", "", cookies=jar, authenticate=True)
             except Exception as exc:
                 raise LinkedInSessionExpiredError(
-                    f"LinkedIn login failed: {exc}"
+                    f"LinkedIn API init with cookies failed: {exc}"
                 ) from exc
 
-        self._api = await asyncio.to_thread(_login)
+        self._api = await asyncio.to_thread(_init_with_cookies)
         logger.info("LinkedIn client authenticated for %s", self.email)
         return self._api
 
@@ -173,14 +417,13 @@ class LinkedInClient:
 
         def _get_metrics() -> Dict[str, int]:
             try:
-                # The linkedin-api library exposes social actions
                 reactions = api.get_post_reactions(post_urn)
                 comments = api.get_post_comments(post_urn)
                 return {
                     "likes": len(reactions) if reactions else 0,
                     "comments": len(comments) if comments else 0,
-                    "shares": 0,  # Not directly available via Voyager
-                    "impressions": 0,  # Not directly available via Voyager
+                    "shares": 0,
+                    "impressions": 0,
                 }
             except Exception as exc:
                 raise LinkedInAPIError(
@@ -288,6 +531,9 @@ class LinkedInClient:
     # ------------------------------------------------------------------
 
     async def refresh_session(self) -> None:
-        """Force re-authentication by clearing the cached API client."""
+        """Force re-authentication by clearing cached cookies and API client."""
         self._api = None
+        if COOKIES_PATH.exists():
+            COOKIES_PATH.unlink()
+            logger.info("Deleted cached LinkedIn cookies")
         logger.info("LinkedIn session cleared; will re-authenticate on next call")
