@@ -959,3 +959,14 @@ Return ONLY valid JSON, no markdown, no explanation."""
             score += 0.1
 
         return min(score, 1.0)
+
+
+# =============================================================================
+# FACTORY
+# =============================================================================
+
+
+async def create_humanizer() -> HumanizerAgent:
+    """Factory function to create a ``HumanizerAgent`` with default clients."""
+    claude = ClaudeClient()
+    return HumanizerAgent(claude=claude)

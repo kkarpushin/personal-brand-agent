@@ -272,7 +272,7 @@ async def _get_visual_creator_agent():
 async def _get_qc_agent():
     global _qc_agent
     if _qc_agent is None:
-        from src.agents.qc import create_qc_agent
+        from src.agents.qc_agent import create_qc_agent
         _qc_agent = await create_qc_agent()
     return _qc_agent
 

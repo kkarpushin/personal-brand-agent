@@ -11,8 +11,11 @@ backoff; after all attempts are exhausted an ``ImageGenerationError`` is
 raised.
 """
 
+import base64
 import logging
 import os
+import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import httpx
@@ -108,6 +111,25 @@ class NanoBananaClient:
                 )
 
             data = response.json()
+            item = data["data"][0]
+
+            # API may return a URL or base64-encoded image
+            if "url" in item:
+                image_url = item["url"]
+            elif "b64_json" in item:
+                # Save base64 image to disk and return local path
+                image_bytes = base64.b64decode(item["b64_json"])
+                images_dir = Path("data/images")
+                images_dir.mkdir(parents=True, exist_ok=True)
+                filename = f"{uuid.uuid4().hex}.jpg"
+                image_path = images_dir / filename
+                image_path.write_bytes(image_bytes)
+                image_url = str(image_path)
+                logger.info("NanoBanana image saved to %s", image_url)
+            else:
+                raise ImageGenerationError(
+                    f"Unexpected API response format: {list(item.keys())}"
+                )
 
             logger.info(
                 "NanoBanana image generated: size=%s, prompt_len=%d",
@@ -116,7 +138,7 @@ class NanoBananaClient:
             )
 
             return {
-                "url": data["data"][0]["url"],
+                "url": image_url,
                 "prompt_used": styled_prompt,
                 "model": "nano-banana-pro",
                 "size": size,

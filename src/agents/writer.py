@@ -1364,3 +1364,14 @@ def _safe_format(template: str, values: Dict[str, str]) -> str:
     """Format *template* with *values*, leaving missing placeholders intact."""
 
     return template.format_map(_DefaultDict(values))
+
+
+# =============================================================================
+# FACTORY
+# =============================================================================
+
+
+async def create_writer() -> WriterAgent:
+    """Factory function to create a ``WriterAgent`` with default clients."""
+    claude = ClaudeClient()
+    return WriterAgent(claude=claude)

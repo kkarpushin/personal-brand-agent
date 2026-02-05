@@ -531,6 +531,9 @@ Score ALL of these criteria: {criteria_names}
         visual_asset: Optional[VisualAsset],
         draft_post: DraftPost,
         content_type: ContentType,
+        extra_criteria: Optional[List[str]] = None,
+        weight_adjustments: Optional[Dict[str, float]] = None,
+        pass_threshold: Optional[float] = None,
     ) -> QCOutput:
         """
         Evaluate post quality and make pass / revise / reject decision.
@@ -555,12 +558,19 @@ Score ALL of these criteria: {criteria_names}
             "Starting QC evaluation for content_type=%s", content_type.value
         )
 
+        # Apply runtime overrides
+        effective_pass = pass_threshold if pass_threshold is not None else self.pass_threshold
+
         # 1. Determine all criteria to evaluate
         all_criteria = self._get_all_criteria(content_type)
         criteria_names = list(all_criteria.keys())
 
         # 2. Build weights map
         weights = self._get_weights(content_type)
+        if weight_adjustments:
+            for k, v in weight_adjustments.items():
+                if k in weights:
+                    weights[k] = v
 
         # 3. Build and execute single-call evaluation prompt
         prompt = self._build_evaluation_prompt(
@@ -589,7 +599,17 @@ Score ALL of these criteria: {criteria_names}
         aggregate = self._calculate_weighted_score(scores, weights)
 
         # 6. Make decision (uses content-type-specific thresholds)
-        decision = self._make_decision(aggregate, content_type)
+        if pass_threshold is not None:
+            # Runtime override: use the caller-supplied threshold
+            _, reject_t = self._resolve_thresholds(content_type)
+            if aggregate >= effective_pass:
+                decision = "pass"
+            elif aggregate < reject_t:
+                decision = "reject"
+            else:
+                decision = "revise"
+        else:
+            decision = self._make_decision(aggregate, content_type)
 
         self.logger.info(
             "QC evaluation complete: aggregate=%.2f decision=%s",
@@ -1211,3 +1231,14 @@ Score ALL of these criteria: {criteria_names}
                 parts.append(f"  - {issue}")
 
         return "\n".join(parts)
+
+
+# =============================================================================
+# FACTORY
+# =============================================================================
+
+
+async def create_qc_agent() -> QCAgent:
+    """Factory function to create a ``QCAgent`` with default clients."""
+    claude = ClaudeClient()
+    return QCAgent(claude=claude)

@@ -860,3 +860,23 @@ class VisualCreatorAgent:
             if tool.lower() in text.lower():
                 return tool
         return "AI Tool"
+
+
+# =============================================================================
+# FACTORY
+# =============================================================================
+
+
+async def create_visual_creator() -> VisualCreatorAgent:
+    """Factory function to create a ``VisualCreatorAgent`` with default clients."""
+    from src.tools.photo_library import PhotoLibrary
+
+    nano_banana = NanoBananaClient()
+    claude = ClaudeClient()
+    photo_library = PhotoLibrary(photos_dir="photos/")
+    photo_selector = PhotoSelectorAgent(photo_library=photo_library)
+    return VisualCreatorAgent(
+        nano_banana=nano_banana,
+        claude=claude,
+        photo_selector=photo_selector,
+    )
