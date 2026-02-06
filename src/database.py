@@ -1332,6 +1332,104 @@ class SupabaseDB:
         )
 
     # -----------------------------------------------------------------
+    # MICRO LEARNINGS (ContinuousLearningEngine)
+    # -----------------------------------------------------------------
+
+    async def save_micro_learnings(
+        self, learnings: List[Dict[str, Any]]
+    ) -> int:
+        """Save micro-learnings to the database.
+
+        Args:
+            learnings: List of learning dicts. Each must have ``id``.
+
+        Returns:
+            Number of learnings saved.
+        """
+        if not learnings:
+            return 0
+
+        result = await (
+            self.client.table("micro_learnings")
+            .insert(learnings)
+            .execute()
+        )
+        return len(result.data) if result.data else 0
+
+    async def get_all_micro_learnings(
+        self, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        """Get all active micro-learnings.
+
+        Args:
+            limit: Maximum number of learnings to retrieve.
+
+        Returns:
+            List of learning dicts ordered by confidence descending.
+        """
+        validate_positive(limit, "limit")
+
+        result = await (
+            self.client.table("micro_learnings")
+            .select("*")
+            .eq("is_active", True)
+            .order("confidence", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+
+    async def update_micro_learnings(
+        self, learnings: List[Dict[str, Any]]
+    ) -> int:
+        """Update existing micro-learnings.
+
+        Uses upsert to handle both updates and edge case inserts.
+
+        Args:
+            learnings: List of learning dicts. Each must have ``id``.
+
+        Returns:
+            Number of learnings updated.
+        """
+        if not learnings:
+            return 0
+
+        result = await (
+            self.client.table("micro_learnings")
+            .upsert(learnings, on_conflict="id")
+            .execute()
+        )
+        return len(result.data) if result.data else 0
+
+    async def get_learnings_by_component(
+        self, component: str, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Get learnings for a specific component.
+
+        Args:
+            component: Component name (writer, humanizer, visual_creator).
+            limit: Maximum number of learnings.
+
+        Returns:
+            List of learning dicts for the component.
+        """
+        validate_not_empty(component, "component")
+        validate_positive(limit, "limit")
+
+        result = await (
+            self.client.table("micro_learnings")
+            .select("*")
+            .eq("affected_component", component)
+            .eq("is_active", True)
+            .gte("confidence", 0.5)
+            .order("confidence", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        return result.data
+
+    # -----------------------------------------------------------------
     # AUTHOR PROFILES
     # -----------------------------------------------------------------
 

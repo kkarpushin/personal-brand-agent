@@ -71,6 +71,8 @@ from src.database import get_db
 from src.config import THRESHOLD_CONFIG
 from src.author.author_profile_agent import AuthorProfileAgent
 from src.author.models import AuthorVoiceProfile
+from src.meta_agent.learning_engine import ContinuousLearningEngine
+from src.meta_agent.models import DialogueSummary, IterationLearnings
 
 logger = logging.getLogger("Orchestrator")
 
@@ -222,6 +224,8 @@ _humanizer_agent = None
 _visual_creator_agent = None
 _qc_agent = None
 _author_profile: AuthorVoiceProfile | None = None
+_reflection_engine = None
+_learning_engine: ContinuousLearningEngine | None = None
 
 
 async def _get_scout_agent():
@@ -305,6 +309,29 @@ async def _get_qc_agent():
         from src.agents.qc_agent import create_qc_agent
         _qc_agent = await create_qc_agent()
     return _qc_agent
+
+
+async def _get_reflection_engine():
+    """Get or create the ReflectionEngine instance."""
+    global _reflection_engine
+    if _reflection_engine is None:
+        from src.meta_agent.reflection_engine import ReflectionEngine
+        _reflection_engine = ReflectionEngine()
+        logger.info("ReflectionEngine initialized")
+    return _reflection_engine
+
+
+async def _get_learning_engine(db) -> ContinuousLearningEngine:
+    """Get or create the ContinuousLearningEngine instance.
+
+    The learning engine is tied to a database connection, so it must
+    be initialized with the db instance.
+    """
+    global _learning_engine
+    if _learning_engine is None:
+        _learning_engine = ContinuousLearningEngine(db=db)
+        logger.info("ContinuousLearningEngine initialized")
+    return _learning_engine
 
 
 # =============================================================================
@@ -569,6 +596,26 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
     # Load author profile for voice matching
     author_profile = await _get_author_profile()
 
+    # Get learnings from ContinuousLearningEngine to inject into prompt
+    learnings_text = ""
+    learning_engine = state.get("learning_engine")
+    if learning_engine is not None:
+        try:
+            relevant_learnings = learning_engine.get_learnings_for_prompt(
+                component="writer",
+                content_type=content_type,
+            )
+            if relevant_learnings:
+                learnings_text = learning_engine.format_learnings_for_prompt(
+                    relevant_learnings
+                )
+                learnings_count = len(relevant_learnings)
+                logger.info(
+                    "[WRITER] Injecting %d learnings into prompt", learnings_count
+                )
+        except Exception as exc:
+            logger.warning("[WRITER] Failed to get learnings: %s", exc)
+
     writer = await _get_writer_agent()
     writer_output: WriterOutput = await writer.run(
         analysis_brief=analysis,
@@ -578,6 +625,7 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
         cta_style=cta_style,
         revision_instructions=revision_instructions,
         author_profile=author_profile,
+        learnings_context=learnings_text,  # Pass learnings to writer
     )
 
     return {
@@ -835,21 +883,27 @@ async def qc_node(state: PipelineState) -> Dict[str, Any]:
 
 
 @with_error_handling(node_name="learn")
-@with_timeout(timeout_seconds=30, node_name="learn")
+@with_timeout(timeout_seconds=45, node_name="learn")
 async def post_evaluation_learning_node(state: PipelineState) -> Dict[str, Any]:
     """Extract learnings from every iteration regardless of pass/fail.
 
     The QC routing decision is computed here and stored in ``_qc_decision``
     so that ``route_after_learning`` can forward it without re-computing.
+
+    Also triggers reflection if repeated failures are detected (revision_count >= 2).
     """
 
     learn_logger = logging.getLogger("ContinuousLearning")
 
     # Compute QC decision for downstream routing
     qc_decision = _compute_qc_decision(state)
+    revision_count = state.get("revision_count", 0)
 
     # Attempt to extract learnings if a learning engine is available
-    learnings = None
+    learnings: Optional[IterationLearnings] = None
+    reflection = None
+    needs_research = False
+
     try:
         learning_engine = state.get("learning_engine")
         if learning_engine is not None:
@@ -862,19 +916,88 @@ async def post_evaluation_learning_node(state: PipelineState) -> Dict[str, Any]:
                 else 0.0
             )
 
+            # Build feedback dict for learning engine
+            meta_feedback = {
+                "weaknesses": meta_eval.get("weaknesses", []),
+                "suggestions": meta_eval.get("suggestions", []),
+                "strengths": meta_eval.get("strengths", []),
+            }
+
+            qc_feedback_text = ""
+            if qc_result:
+                qc_feedback_text = getattr(qc_result, "feedback", "")
+
             learnings = await learning_engine.learn_from_iteration(
                 post_id=state.get("run_id", "unknown"),
                 content_type=state.get("content_type"),
                 qc_score=qc_score,
-                meta_feedback=meta_eval,
-                qc_feedback=qc_result.feedback if qc_result else "",
+                meta_feedback=meta_feedback,
+                qc_feedback=qc_feedback_text,
             )
 
             learn_logger.info(
-                "[LEARN] Post %s: extracted learnings, qc_decision=%s",
+                "[LEARN] Post %s: %d new learnings, %d confirmed, qc_decision=%s",
                 state.get("run_id", "?"),
+                len(learnings.new_learnings) if learnings else 0,
+                len(learnings.confirmed_learnings) if learnings else 0,
                 qc_decision,
             )
+
+            # --- Trigger reflection on repeated failures ---
+            # If we've already revised once and still failing, reflect deeper
+            if qc_decision.startswith("revise") and revision_count >= 2:
+                learn_logger.info(
+                    "[REFLECT] Triggering reflection: revision_count=%d, decision=%s",
+                    revision_count,
+                    qc_decision,
+                )
+                try:
+                    reflection_engine = await _get_reflection_engine()
+                    db = await get_db()
+
+                    # Build dialogue summary from QC feedback
+                    dialogue_summary = DialogueSummary(
+                        weaknesses=meta_feedback.get("weaknesses", []),
+                        suggestions=meta_feedback.get("suggestions", []),
+                        knowledge_gaps=[],
+                        research_queries=[],
+                        confidence_in_suggestions=0.7,
+                    )
+
+                    # Get historical posts for pattern detection
+                    recent_posts = await db.get_recent_posts(limit=10)
+                    historical_content = [
+                        p.get("text_content", p.get("full_text", ""))[:200]
+                        for p in recent_posts
+                    ]
+
+                    # Get draft text
+                    draft = state.get("draft_post")
+                    draft_text = ""
+                    if draft:
+                        draft_text = getattr(draft, "full_text", str(draft))
+
+                    reflection = await reflection_engine.reflect(
+                        original_work=draft_text,
+                        critique=dialogue_summary,
+                        historical_work=historical_content,
+                    )
+
+                    needs_research = bool(reflection.research_needed)
+
+                    learn_logger.info(
+                        "[REFLECT] Reflection complete: valid=%s, pattern=%s, "
+                        "research_needed=%d, prompt_changes=%d",
+                        reflection.critique_valid,
+                        reflection.is_recurring_pattern,
+                        len(reflection.research_needed) if reflection.research_needed else 0,
+                        len(reflection.prompt_changes) if reflection.prompt_changes else 0,
+                    )
+                except Exception as ref_exc:
+                    learn_logger.warning(
+                        "[REFLECT] Reflection failed (non-critical): %s", ref_exc
+                    )
+
     except Exception as exc:
         # Learning failures are non-critical -- log and continue
         learn_logger.warning(
@@ -884,6 +1007,8 @@ async def post_evaluation_learning_node(state: PipelineState) -> Dict[str, Any]:
     return {
         "iteration_learnings": learnings,
         "_qc_decision": qc_decision,
+        "reflection": reflection,
+        "needs_research": needs_research,
     }
 
 
@@ -1542,10 +1667,24 @@ async def run_pipeline(
             "best practices"
         )
 
+    # ---- Initialize learning engine --------------------------------------
+    learning_engine = await _get_learning_engine(db)
+
+    # Bootstrap learnings for first post
+    if is_first_post:
+        try:
+            bootstrap_learnings = await learning_engine.handle_first_post()
+            run_logger.info(
+                "[FIRST POST] Bootstrapped %d learnings", len(bootstrap_learnings)
+            )
+        except Exception as exc:
+            run_logger.warning("Failed to bootstrap learnings: %s", exc)
+
     # ---- Initialise state ------------------------------------------------
     run_id = generate_id()
     initial_state = initialize_pipeline_state(run_id, selection_mode)
     initial_state["is_first_post"] = is_first_post
+    initial_state["learning_engine"] = learning_engine
 
     run_logger.info(
         "[PIPELINE] Starting run %s (mode=%s, first_post=%s)",

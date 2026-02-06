@@ -786,6 +786,7 @@ class WriterAgent:
         cta_style: Optional[str] = None,
         revision_instructions: Optional[List[str]] = None,
         author_profile: Optional[AuthorVoiceProfile] = None,
+        learnings_context: Optional[str] = None,
     ) -> WriterOutput:
         """Generate a LinkedIn post draft from an analysis brief.
 
@@ -803,6 +804,8 @@ class WriterAgent:
             author_profile: Optional author voice profile to match the author's
                 authentic voice. If provided, uses the profile's characteristic
                 phrases instead of the default STYLE_GUIDE.
+            learnings_context: Optional formatted learnings text from
+                ContinuousLearningEngine to inject into the prompt.
 
         Returns:
             A ``WriterOutput`` dataclass with the primary draft, alternative
@@ -841,6 +844,7 @@ class WriterAgent:
             selected_cta,
             revision_instructions,
             author_profile,
+            learnings_context,
         )
 
         # 5. Generate with Claude -- NO FALLBACK, fail fast
@@ -1051,6 +1055,7 @@ class WriterAgent:
         cta: str,
         revision_instructions: Optional[List[str]],
         author_profile: Optional[AuthorVoiceProfile] = None,
+        learnings_context: Optional[str] = None,
     ) -> str:
         """Assemble the full generation prompt for Claude."""
 
@@ -1112,6 +1117,10 @@ class WriterAgent:
 
         # Safe format: ignore missing keys by using a default-returning dict
         prompt = _safe_format(prompt_template, common)
+
+        # Inject learnings from ContinuousLearningEngine if available
+        if learnings_context:
+            prompt = learnings_context + "\n\n" + prompt
 
         # Append revision instructions if present
         if revision_instructions:

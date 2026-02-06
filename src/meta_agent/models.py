@@ -74,6 +74,59 @@ from src.utils import utc_now, generate_id
 
 
 # =============================================================================
+# LEARNING TYPE (Enum) - for ContinuousLearningEngine
+# Architecture reference: architecture.md lines 14578-14585
+# =============================================================================
+
+
+class LearningType(Enum):
+    """Types of micro-learnings the system can acquire.
+
+    Used by ContinuousLearningEngine to classify learnings extracted
+    from evaluation feedback.
+
+    Attributes:
+        HOOK_PATTERN: What hooks work.
+        VISUAL_STYLE: What visuals perform.
+        CONTENT_STRUCTURE: Post structure insights.
+        TONE_ADJUSTMENT: Voice/tone learnings.
+        TIMING_INSIGHT: When to post.
+        AUDIENCE_PREFERENCE: What audience likes.
+    """
+
+    HOOK_PATTERN = "hook_pattern"
+    VISUAL_STYLE = "visual_style"
+    CONTENT_STRUCTURE = "content_structure"
+    TONE_ADJUSTMENT = "tone_adjustment"
+    TIMING_INSIGHT = "timing_insight"
+    AUDIENCE_PREFERENCE = "audience_preference"
+
+
+# =============================================================================
+# LEARNING SOURCE (Enum) - for ContinuousLearningEngine
+# Architecture reference: architecture.md lines 14588-14594
+# =============================================================================
+
+
+class LearningSource(Enum):
+    """Where the learning came from.
+
+    Attributes:
+        META_EVALUATION: From self-evaluation.
+        QC_FEEDBACK: From QC agent.
+        POST_PERFORMANCE: From actual engagement.
+        COMPETITOR_ANALYSIS: From studying competitors.
+        EXPLICIT_RULE: Programmed by human.
+    """
+
+    META_EVALUATION = "meta_evaluation"
+    QC_FEEDBACK = "qc_feedback"
+    POST_PERFORMANCE = "post_performance"
+    COMPETITOR_ANALYSIS = "competitor_analysis"
+    EXPLICIT_RULE = "explicit_rule"
+
+
+# =============================================================================
 # CAPABILITY TYPE (Enum)
 # Architecture reference: architecture.md lines 15560-15568
 # =============================================================================
@@ -849,6 +902,197 @@ class Learning:
 
 
 # =============================================================================
+# MICRO LEARNING - for ContinuousLearningEngine
+# Architecture reference: architecture.md lines 14611-14736
+# =============================================================================
+
+
+@dataclass
+class MicroLearning:
+    """Single unit of learning acquired during iteration.
+
+    These are SMALL, SPECIFIC insights that accumulate over time.
+    High-confidence learnings become permanent rules.
+
+    Architecture reference: ``architecture.md`` lines 14611-14736.
+
+    Attributes:
+        id: Unique identifier.
+        learning_type: Type of learning (hook_pattern, visual_style, etc.).
+        source: Where this learning came from (meta_evaluation, qc_feedback, etc.).
+        description: Human-readable description.
+        rule: Machine-applicable rule.
+        affected_component: Which component this affects (writer, visual_creator, etc.).
+        confidence: 0.0-1.0, grows with confirmations.
+        confirmations: Times this was confirmed.
+        contradictions: Times this was contradicted.
+        content_type: Specific content type this applies to (None = all).
+        created_at: UTC timestamp when created.
+        last_confirmed_at: Last time this was confirmed.
+        is_promoted_to_rule: High confidence -> permanent rule.
+        is_bootstrap: True if this is a bootstrap learning.
+        is_active: Can be deactivated without deletion.
+    """
+
+    id: str
+    learning_type: LearningType
+    source: LearningSource
+    description: str
+    rule: str
+    affected_component: str
+
+    # Confidence tracking
+    confidence: float = 0.4
+    confirmations: int = 0
+    contradictions: int = 0
+
+    # Context
+    content_type: Optional[str] = None  # None = applies to all
+    created_at: datetime = field(default_factory=utc_now)
+    last_confirmed_at: Optional[datetime] = None
+
+    # Promotion tracking
+    is_promoted_to_rule: bool = False
+    is_bootstrap: bool = False
+    is_active: bool = True
+
+    # Rate limiting constant
+    MIN_CONFIRMATION_INTERVAL_HOURS: int = 24
+
+    def confirm(self) -> bool:
+        """Called when evidence supports this learning.
+
+        Returns True if confirmation was accepted, False if rate-limited.
+        """
+        # Rate limiting
+        if self.last_confirmed_at:
+            hours_since = (utc_now() - self.last_confirmed_at).total_seconds() / 3600
+            if hours_since < self.MIN_CONFIRMATION_INTERVAL_HOURS:
+                return False
+
+        self.confirmations += 1
+        self.last_confirmed_at = utc_now()
+        # Confidence grows logarithmically (diminishing returns)
+        self.confidence = min(1.0, self.confidence + 0.1 * (1 - self.confidence))
+
+        # Promote to rule if very confident
+        if self.confidence >= 0.9 and self.confirmations >= 5:
+            self.is_promoted_to_rule = True
+
+        return True
+
+    def contradict(self) -> None:
+        """Called when evidence contradicts this learning."""
+        self.contradictions += 1
+        # Confidence drops faster than it grows
+        self.confidence = max(0.0, self.confidence - 0.15)
+
+        # Demote from rule if no longer confident
+        if self.confidence < 0.7:
+            self.is_promoted_to_rule = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for database storage."""
+        return {
+            "id": self.id,
+            "learning_type": self.learning_type.value,
+            "source": self.source.value,
+            "description": self.description,
+            "rule": self.rule,
+            "affected_component": self.affected_component,
+            "confidence": self.confidence,
+            "confirmations": self.confirmations,
+            "contradictions": self.contradictions,
+            "content_type": self.content_type,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_confirmed_at": (
+                self.last_confirmed_at.isoformat() if self.last_confirmed_at else None
+            ),
+            "is_promoted_to_rule": self.is_promoted_to_rule,
+            "is_bootstrap": self.is_bootstrap,
+            "is_active": self.is_active,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MicroLearning":
+        """Create from dictionary (database record)."""
+        from datetime import datetime
+
+        created_at = data.get("created_at")
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        elif created_at is None:
+            created_at = utc_now()
+
+        last_confirmed_at = data.get("last_confirmed_at")
+        if isinstance(last_confirmed_at, str):
+            last_confirmed_at = datetime.fromisoformat(
+                last_confirmed_at.replace("Z", "+00:00")
+            )
+
+        return cls(
+            id=data.get("id", ""),
+            learning_type=LearningType(data.get("learning_type", "hook_pattern")),
+            source=LearningSource(data.get("source", "meta_evaluation")),
+            description=data.get("description", ""),
+            rule=data.get("rule", ""),
+            affected_component=data.get("affected_component", "writer"),
+            confidence=float(data.get("confidence", 0.4)),
+            confirmations=int(data.get("confirmations", 0)),
+            contradictions=int(data.get("contradictions", 0)),
+            content_type=data.get("content_type"),
+            created_at=created_at,
+            last_confirmed_at=last_confirmed_at,
+            is_promoted_to_rule=bool(data.get("is_promoted_to_rule", False)),
+            is_bootstrap=bool(data.get("is_bootstrap", False)),
+            is_active=bool(data.get("is_active", True)),
+        )
+
+
+# =============================================================================
+# ITERATION LEARNINGS - for ContinuousLearningEngine
+# Architecture reference: architecture.md lines 14738-14756
+# =============================================================================
+
+
+@dataclass
+class IterationLearnings:
+    """All learnings from a single iteration.
+
+    Returned by ContinuousLearningEngine.learn_from_iteration().
+
+    Attributes:
+        iteration_id: Unique identifier for this iteration.
+        post_id: ID of the post being evaluated.
+        text_feedback: Feedback strings from text evaluation.
+        visual_feedback: Feedback strings from visual evaluation.
+        structure_feedback: Feedback about structure.
+        new_learnings: List of newly created MicroLearnings.
+        confirmed_learnings: IDs of existing learnings that were confirmed.
+        contradicted_learnings: IDs of existing learnings that were contradicted.
+        prompt_adjustments: component -> adjustment made.
+        config_adjustments: config key -> new value.
+    """
+
+    iteration_id: str
+    post_id: str
+
+    # Component-specific feedback that triggered learning
+    text_feedback: List[str] = field(default_factory=list)
+    visual_feedback: List[str] = field(default_factory=list)
+    structure_feedback: List[str] = field(default_factory=list)
+
+    # Extracted learnings
+    new_learnings: List[MicroLearning] = field(default_factory=list)
+    confirmed_learnings: List[str] = field(default_factory=list)  # IDs
+    contradicted_learnings: List[str] = field(default_factory=list)  # IDs
+
+    # Immediate actions taken
+    prompt_adjustments: Dict[str, str] = field(default_factory=dict)
+    config_adjustments: Dict[str, Any] = field(default_factory=dict)
+
+
+# =============================================================================
 # IMPROVEMENT RESULT
 # Architecture reference: architecture.md lines 19767-19774
 # =============================================================================
@@ -1448,6 +1692,8 @@ def get_config_path(component: str) -> str:
 
 __all__ = [
     # Enums
+    "LearningType",
+    "LearningSource",
     "CapabilityType",
     "ResearchTrigger",
     "ModificationRiskLevel",
@@ -1478,6 +1724,8 @@ __all__ = [
     "PromptEvolution",
     # Knowledge
     "Learning",
+    "MicroLearning",
+    "IterationLearnings",
     # Improvement loop
     "ImprovementResult",
     # Experimentation
