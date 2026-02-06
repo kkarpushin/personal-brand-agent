@@ -1022,7 +1022,16 @@ class WriterAgent:
 
     @staticmethod
     def _select_hashtags(content_type: ContentType) -> List[str]:
-        """Build a hashtag list (3-5) mixing broad and specific tags."""
+        """Build a hashtag list. Returns empty - hashtags are outdated on LinkedIn."""
+        # Hashtags are no longer recommended on LinkedIn:
+        # - Algorithm doesn't prioritize them
+        # - Makes posts look spammy/dated
+        # - Top creators don't use them
+        return []
+
+    @staticmethod
+    def _select_hashtags_legacy(content_type: ContentType) -> List[str]:
+        """Legacy hashtag selection - kept for reference, not used."""
 
         strategy = TYPE_SPECIFIC_HASHTAGS.get(content_type, {})
         broad: List[str] = strategy.get("broad", ["#AI"])
@@ -1296,17 +1305,7 @@ class WriterAgent:
                 f"Minimum useful length is ~200 chars."
             )
 
-        # Hashtag count check
-        if len(draft.hashtags) < 3:
-            self.logger.warning(
-                "Post has fewer than 3 hashtags (%d). Recommended: 3-5.",
-                len(draft.hashtags),
-            )
-        if len(draft.hashtags) > 5:
-            self.logger.warning(
-                "Post has more than 5 hashtags (%d). Recommended: 3-5.",
-                len(draft.hashtags),
-            )
+        # Hashtag validation removed - hashtags are no longer used on LinkedIn
 
         # Emoji count check
         emoji_pattern = re.compile(
@@ -1338,10 +1337,9 @@ class WriterAgent:
             )
 
         self.logger.info(
-            "Draft validated: %d chars, hook %d chars, %d hashtags",
+            "Draft validated: %d chars, hook %d chars",
             draft.character_count,
             len(draft.hook),
-            len(draft.hashtags),
         )
 
     # -----------------------------------------------------------------

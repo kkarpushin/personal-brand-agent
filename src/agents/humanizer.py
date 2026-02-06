@@ -832,11 +832,8 @@ Return ONLY valid JSON, no markdown, no explanation."""
             )
             hook = self._truncate_at_word_boundary(hook, 210)
 
-        # Assemble full text
-        hashtag_str = " ".join(draft.hashtags)
+        # Assemble full text (no hashtags - they're outdated on LinkedIn)
         full_text = f"{hook}\n\n{body}\n\n{cta}"
-        if hashtag_str:
-            full_text = f"{full_text}\n\n{hashtag_str}"
 
         # Validate total length
         if len(full_text) > 3000:
