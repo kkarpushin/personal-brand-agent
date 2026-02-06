@@ -307,8 +307,11 @@ class ProfileImporter:
             text = commentary
 
         if not text:
-            # Try alternative field paths
-            text = raw.get("text", raw.get("content", ""))
+            # Try alternative field paths (but avoid picking up the content
+            # component dict — only accept strings)
+            alt = raw.get("text", "")
+            if isinstance(alt, str):
+                text = alt
 
         # Extract engagement metrics
         social_detail = raw.get("socialDetail", {}) or {}
