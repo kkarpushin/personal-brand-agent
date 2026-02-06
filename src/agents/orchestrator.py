@@ -1085,7 +1085,7 @@ async def queue_for_manual_review(state: PipelineState) -> Dict[str, Any]:
             f"quality below threshold. Queued for manual review."
         ],
         "final_content": {
-            "text": humanized_post.humanized_text,
+            "post_text": humanized_post.humanized_text,  # Must match prepare_for_human_approval
             "visual": state.get("visual_asset"),
             "qc_score": qc_result.total_score if qc_result else None,
             "requires_human_decision": True,
