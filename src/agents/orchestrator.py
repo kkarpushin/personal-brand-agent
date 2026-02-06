@@ -377,7 +377,7 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
                 "authors", "thesis", "methodology", "findings",
                 "implications", "counterintuitive",
             ],
-            "required_fields": ["thesis", "key_findings", "authors"],
+            "required_fields": ["thesis", "key_findings"],  # authors optional - LLM often fails to extract
             "preferred_templates": ["RESEARCH_INSIGHT", "CONTRARIAN_TAKE", "FUTURE_PREDICTION"],
             "hook_styles": get_hook_styles_for_type(ContentType.PRIMARY_SOURCE),
             "cta_style": "intellectual_discourse",
