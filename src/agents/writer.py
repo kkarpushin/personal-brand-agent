@@ -43,6 +43,7 @@ from src.models import (
 )
 from src.tools.claude_client import ClaudeClient
 from src.utils import generate_id, utc_now
+from src.author.models import AuthorVoiceProfile
 
 
 logger = logging.getLogger("Writer")
@@ -784,6 +785,7 @@ class WriterAgent:
         hook_styles: Optional[List[HookStyle]] = None,
         cta_style: Optional[str] = None,
         revision_instructions: Optional[List[str]] = None,
+        author_profile: Optional[AuthorVoiceProfile] = None,
     ) -> WriterOutput:
         """Generate a LinkedIn post draft from an analysis brief.
 
@@ -798,6 +800,9 @@ class WriterAgent:
                 CTA is selected.
             revision_instructions: Optional list of revision notes from QC to
                 incorporate into the generation prompt.
+            author_profile: Optional author voice profile to match the author's
+                authentic voice. If provided, uses the profile's characteristic
+                phrases instead of the default STYLE_GUIDE.
 
         Returns:
             A ``WriterOutput`` dataclass with the primary draft, alternative
@@ -835,6 +840,7 @@ class WriterAgent:
             hook_style,
             selected_cta,
             revision_instructions,
+            author_profile,
         )
 
         # 5. Generate with Claude -- NO FALLBACK, fail fast
@@ -1044,6 +1050,7 @@ class WriterAgent:
         hook_style: HookStyle,
         cta: str,
         revision_instructions: Optional[List[str]],
+        author_profile: Optional[AuthorVoiceProfile] = None,
     ) -> str:
         """Assemble the full generation prompt for Claude."""
 
@@ -1052,10 +1059,26 @@ class WriterAgent:
             max_emojis=STYLE_GUIDE["linkedin_rules"]["max_emojis"],
         )
 
-        # Build hook examples string
-        hooks_str = "\n".join(
-            f"  - {h}" for h in template.get("example_hooks", [])
-        )
+        # Build hook examples string — prefer author's best-performing hooks
+        if author_profile and author_profile.best_performing_hooks:
+            hooks_str = "\n".join(
+                f"  - {h}" for h in author_profile.best_performing_hooks[:5]
+            )
+        else:
+            hooks_str = "\n".join(
+                f"  - {h}" for h in template.get("example_hooks", [])
+            )
+
+        # Use author's characteristic phrases if profile is provided
+        if author_profile and author_profile.characteristic_phrases:
+            phrases_to_use = ", ".join(author_profile.characteristic_phrases[:10])
+        else:
+            phrases_to_use = ", ".join(STYLE_GUIDE["phrases_to_use"])
+
+        if author_profile and author_profile.avoided_phrases:
+            phrases_to_avoid = ", ".join(author_profile.avoided_phrases[:10])
+        else:
+            phrases_to_avoid = ", ".join(STYLE_GUIDE["phrases_to_avoid"])
 
         # Common substitution values
         common: Dict[str, str] = {
@@ -1068,8 +1091,8 @@ class WriterAgent:
             "length_target": template.get("length_target", "1200-1500 chars"),
             "suggested_cta": cta,
             "constraints": constraints,
-            "phrases_to_use": ", ".join(STYLE_GUIDE["phrases_to_use"]),
-            "phrases_to_avoid": ", ".join(STYLE_GUIDE["phrases_to_avoid"]),
+            "phrases_to_use": phrases_to_use,
+            "phrases_to_avoid": phrases_to_avoid,
             "complexity_level": brief.complexity_level,
         }
 

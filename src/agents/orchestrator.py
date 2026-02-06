@@ -68,6 +68,9 @@ from src.exceptions import (
 )
 from src.utils import utc_now, generate_id
 from src.database import get_db
+from src.config import THRESHOLD_CONFIG
+from src.author.author_profile_agent import AuthorProfileAgent
+from src.author.models import AuthorVoiceProfile
 
 logger = logging.getLogger("Orchestrator")
 
@@ -140,8 +143,7 @@ MAX_REJECT_RESTARTS: int = 2
 MAX_CRITIQUE_HISTORY: int = 10
 """Maximum critique entries retained in state to prevent memory bloat."""
 
-DEFAULT_PASS_THRESHOLD: float = 7.0
-"""Default QC pass threshold when type_context does not specify one."""
+# Pass thresholds are now centralized in THRESHOLD_CONFIG.get_pass_threshold()
 
 
 # =============================================================================
@@ -219,6 +221,7 @@ _meta_agent = None
 _humanizer_agent = None
 _visual_creator_agent = None
 _qc_agent = None
+_author_profile: AuthorVoiceProfile | None = None
 
 
 async def _get_scout_agent():
@@ -243,6 +246,33 @@ async def _get_writer_agent():
         from src.agents.writer import create_writer
         _writer_agent = await create_writer()
     return _writer_agent
+
+
+async def _get_author_profile() -> AuthorVoiceProfile | None:
+    """Load and cache the author profile from the database.
+
+    Returns the cached profile on subsequent calls. Returns None if no
+    profile is found (pipeline will use default STYLE_GUIDE).
+    """
+    global _author_profile
+    if _author_profile is None:
+        try:
+            db = await get_db()
+            agent = AuthorProfileAgent(db=db)
+            # Load profile for the default author (single-author system)
+            profile = await agent.load_profile("Konstantin Karpushin")
+            if profile:
+                logger.info(
+                    "Author profile loaded: %d phrases, formality=%.2f",
+                    len(profile.characteristic_phrases),
+                    profile.formality_level,
+                )
+                _author_profile = profile
+            else:
+                logger.warning("No author profile found, using default style guide")
+        except Exception as exc:
+            logger.warning("Failed to load author profile: %s", exc)
+    return _author_profile
 
 
 async def _get_meta_agent():
@@ -313,7 +343,7 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             # QC config
             "extra_criteria": ["metrics_credibility"],
             "weight_adjustments": {"factual_accuracy": 1.3, "engagement_hook": 0.9},
-            "pass_threshold": 7.2,
+            # pass_threshold: use THRESHOLD_CONFIG.get_pass_threshold() instead
         },
         ContentType.PRIMARY_SOURCE: {
             "extraction_focus": [
@@ -331,7 +361,7 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "color_scheme": "academic_subtle",
             "extra_criteria": ["intellectual_depth"],
             "weight_adjustments": {"factual_accuracy": 1.4, "engagement_hook": 0.8},
-            "pass_threshold": 7.5,
+            # pass_threshold: use THRESHOLD_CONFIG.get_pass_threshold() instead
         },
         ContentType.AUTOMATION_CASE: {
             "extraction_focus": [
@@ -349,7 +379,7 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "color_scheme": "tech_vibrant",
             "extra_criteria": ["reproducibility"],
             "weight_adjustments": {"actionability": 1.3, "engagement_hook": 1.1},
-            "pass_threshold": 7.0,
+            # pass_threshold: use THRESHOLD_CONFIG.get_pass_threshold() instead
         },
         ContentType.COMMUNITY_CONTENT: {
             "extraction_focus": [
@@ -367,7 +397,7 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "color_scheme": "community_warm",
             "extra_criteria": ["community_authenticity"],
             "weight_adjustments": {"voice_match": 1.2, "engagement_hook": 1.2},
-            "pass_threshold": 6.8,
+            # pass_threshold: use THRESHOLD_CONFIG.get_pass_threshold() instead
         },
         ContentType.TOOL_RELEASE: {
             "extraction_focus": [
@@ -385,7 +415,7 @@ def load_type_context(content_type: ContentType) -> Dict[str, Any]:
             "color_scheme": "product_neutral",
             "extra_criteria": ["evaluation_balance"],
             "weight_adjustments": {"factual_accuracy": 1.2, "actionability": 1.1},
-            "pass_threshold": 7.0,
+            # pass_threshold: use THRESHOLD_CONFIG.get_pass_threshold() instead
         },
     }
 
@@ -536,6 +566,9 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
         meta_eval = state.get("meta_evaluation") or {}
         revision_instructions = meta_eval.get("suggestions", [])
 
+    # Load author profile for voice matching
+    author_profile = await _get_author_profile()
+
     writer = await _get_writer_agent()
     writer_output: WriterOutput = await writer.run(
         analysis_brief=analysis,
@@ -544,6 +577,7 @@ async def writer_node(state: PipelineState) -> Dict[str, Any]:
         hook_styles=hook_styles,
         cta_style=cta_style,
         revision_instructions=revision_instructions,
+        author_profile=author_profile,
     )
 
     return {
@@ -602,9 +636,8 @@ async def meta_evaluate_node(state: PipelineState) -> Dict[str, Any]:
         content_type=content_type,
     )
 
-    # Type-specific threshold from context (falls back to global default)
-    type_context = state.get("type_context") or {}
-    threshold = type_context.get("pass_threshold", DEFAULT_PASS_THRESHOLD)
+    # Type-specific threshold from centralized config
+    threshold = THRESHOLD_CONFIG.get_pass_threshold(content_type)
 
     score = getattr(evaluation, "score", 0.0)
 
@@ -759,7 +792,7 @@ async def qc_node(state: PipelineState) -> Dict[str, Any]:
 
     extra_criteria = type_context.get("extra_criteria", [])
     weight_adjustments = type_context.get("weight_adjustments", {})
-    pass_threshold = type_context.get("pass_threshold", DEFAULT_PASS_THRESHOLD)
+    pass_threshold = THRESHOLD_CONFIG.get_pass_threshold(content_type)
 
     qc = await _get_qc_agent()
     qc_output: QCOutput = await qc.run(
@@ -1119,9 +1152,8 @@ def _compute_qc_decision(state: PipelineState) -> str:
         decision_raw = getattr(qc_result, "decision", "")
     decision_upper = decision_raw.upper()
 
-    # Type-specific pass threshold
-    type_context = state.get("type_context") or {}
-    pass_threshold = type_context.get("pass_threshold", DEFAULT_PASS_THRESHOLD)
+    # Type-specific pass threshold from centralized config
+    pass_threshold = THRESHOLD_CONFIG.get_pass_threshold(content_type)
 
     # PASS case
     if decision_upper == "PASS" or score >= pass_threshold:
