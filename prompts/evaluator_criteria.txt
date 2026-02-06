@@ -1,57 +1,65 @@
 === EVALUATION RUBRIC ===
 
 ### Hook Strength (weight: 0.20)
-Question: Do the first 2 lines stop the scroll?
-10: Impossible to scroll past. Creates immediate curiosity gap or emotional reaction.
-8: Strong hook that stops most readers. Clear value proposition.
-6: Decent hook but generic. Could apply to many posts.
+Question: Do the first 2 lines stop the scroll? Is it uncomfortable or surprising?
+10: Impossible to scroll past. Confession, failure, or contrarian take that demands attention.
+8: Strong hook with tension. Makes reader want to know more.
+6: Decent hook but safe. Could be more provocative.
 4: Weak hook. Starts with background instead of punch.
-2: No hook. Buries the lede. Reader has no reason to continue.
+2: No hook. Generic opening. Reader has no reason to continue.
 
-### Simplicity (weight: 0.20)
-Question: Could a non-technical person understand this? Is there a clear everyday analogy?
-10: Crystal clear. Uses a vivid analogy, zero unexplained jargon, anyone could understand it.
-8: Very accessible. One or two technical terms but explained well.
-6: Somewhat accessible but relies on jargon or assumes technical knowledge.
-4: Hard to follow without domain expertise. Few analogies or examples.
-2: Reads like an academic abstract. Dense jargon, no simplification effort.
+### Personal Voice (weight: 0.20)
+Question: Does this sound like Konstantin from Codebridge, not a generic thought leader?
+10: Unmistakably Konstantin. First person, Codebridge mentioned, specific project/client reference.
+8: Clear personal voice with Codebridge connection. Sounds like a founder.
+6: Personal tone but missing concrete connection to Codebridge or clients.
+4: Generic voice. Could be anyone writing about AI.
+2: Corporate speak. No personal stake or identity visible.
+
+### Uncomfortable Honesty (weight: 0.15)
+Question: Is there a confession, failure, or contrarian truth? Would this be scary to post?
+10: Raw honesty that most founders wouldn't share. Admitting failure, changing mind, calling out bullshit.
+8: Real honesty with some vulnerability. Clear personal stake.
+6: Honest but safe. Missing the uncomfortable edge.
+4: Surface-level insights. Nothing that required courage to share.
+2: Generic takes. Corporate-safe content.
 
 ### Specificity (weight: 0.15)
-Question: Are there concrete numbers, names, and examples?
-10: Concrete numbers, named companies/tools, specific examples throughout.
-8: Good specificity with some concrete details.
+Question: Are there concrete numbers, client stories, project details?
+10: Specific project, real numbers, named tools, what actually happened.
+8: Good details with some concrete examples from Codebridge work.
 6: Mix of specific and vague. Some details, some generic statements.
-4: Mostly vague. Few concrete examples.
-2: Entirely abstract. No specific examples, numbers, or names.
+4: Mostly vague. Few concrete examples from real work.
+2: Entirely abstract. No specific Codebridge connection.
 
-### Value Density (weight: 0.15)
-Question: Does each paragraph add value? Are there actionable takeaways?
-10: Every paragraph delivers actionable insight. No filler.
+### Value Density (weight: 0.10)
+Question: Does each paragraph add value? Actionable for the reader?
+10: Every paragraph delivers insight. No filler. Reader can apply this.
 8: High value throughout with minimal fluff.
 6: Some valuable insights mixed with filler.
 4: More padding than substance.
 2: No actionable takeaways. Pure fluff.
 
-### Authenticity (weight: 0.15)
-Question: Does this sound like a real person wrote it?
-10: Unmistakably human. Unique voice, personal touches, natural flow.
-8: Sounds human with minor AI tells.
-6: Could be human or AI. Generic but not obviously artificial.
-4: Some AI patterns visible. Overly formal or structured.
-2: Obviously AI-generated. Robotic, formulaic, or uses AI phrases.
+### Authenticity (weight: 0.10)
+Question: Does it sound like 2am texting, not LinkedIn influencer?
+10: Rough edges, natural flow, passion visible. Not polished corporate speak.
+8: Sounds human with energy and directness.
+6: Could be more raw. Too smooth in places.
+4: LinkedIn-smooth. Missing the pulse and tension.
+2: Obviously AI or corporate. Robotic and formulaic.
 
-### Structure (weight: 0.10)
-Question: Is it easy to scan? Good use of white space?
-10: Perfect scannability. White space, short paragraphs, clear flow.
+### Structure (weight: 0.05)
+Question: Easy to scan? Good rhythm?
+10: Perfect scannability. Short paragraphs, white space, punchy sentences.
 8: Good structure, easy to read.
-6: Acceptable structure but could be improved.
-4: Hard to scan. Dense paragraphs.
-2: Wall of text. No visual breaks.
+6: Acceptable but could be tighter.
+4: Dense paragraphs.
+2: Wall of text.
 
 ### CTA Clarity (weight: 0.05)
-Question: Is there a clear next step for the reader?
-10: Clear, natural call-to-action that invites engagement.
-8: Good CTA, clear next step for reader.
-6: CTA present but weak or generic.
-4: Unclear what reader should do.
+Question: Does the ending invite real conversation?
+10: Natural CTA that feels like genuine curiosity, not engagement farming.
+8: Good CTA, clear invitation to discuss.
+6: CTA present but generic.
+4: Weak ending.
 2: No CTA or abrupt ending.

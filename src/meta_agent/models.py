@@ -1228,93 +1228,106 @@ class EvaluationCriterion:
 
 
 # The canonical evaluation rubric. Weights MUST sum to 1.0.
+# Optimized for Konstantin Karpushin / Codebridge voice: raw, personal, uncomfortable.
 evaluation_rubric: Dict[str, EvaluationCriterion] = {
     "hook_strength": EvaluationCriterion(
         name="Hook Strength",
         weight=0.20,
         rubric={
-            10: "Impossible to scroll past. Creates immediate curiosity gap or emotional reaction.",
-            8: "Strong hook that stops most readers. Clear value proposition.",
-            6: "Decent hook but generic. Could apply to many posts.",
+            10: "Impossible to scroll past. Confession, failure, or contrarian take that demands attention.",
+            8: "Strong hook with tension. Makes reader want to know more.",
+            6: "Decent hook but safe. Could be more provocative.",
             4: "Weak hook. Starts with background instead of punch.",
-            2: "No hook. Buries the lede. Reader has no reason to continue.",
+            2: "No hook. Generic opening. Reader has no reason to continue.",
         },
-        evaluation_prompt="Rate the first 2 lines. Do they stop the scroll?",
+        evaluation_prompt="Do the first 2 lines stop the scroll? Is it uncomfortable or surprising?",
     ),
-    "simplicity": EvaluationCriterion(
-        name="Simplicity",
+    "personal_voice": EvaluationCriterion(
+        name="Personal Voice",
         weight=0.20,
         rubric={
-            10: "Crystal clear. Uses a vivid everyday analogy, zero unexplained jargon, anyone can understand.",
-            8: "Very accessible. One or two technical terms but explained well.",
-            6: "Somewhat accessible but relies on jargon or assumes technical knowledge.",
-            4: "Hard to follow without domain expertise. Few analogies or examples.",
-            2: "Reads like an academic abstract. Dense jargon, no simplification effort.",
+            10: "Unmistakably Konstantin. First person, Codebridge mentioned, specific project/client reference.",
+            8: "Clear personal voice with Codebridge connection. Sounds like a founder.",
+            6: "Personal tone but missing concrete connection to Codebridge or clients.",
+            4: "Generic voice. Could be anyone writing about AI.",
+            2: "Corporate speak. No personal stake or identity visible.",
         },
         evaluation_prompt=(
-            "Could a non-technical person understand this? "
-            "Is there a clear everyday analogy?"
+            "Does this sound like Konstantin from Codebridge, not a generic thought leader? "
+            "Is there a first-person perspective and Codebridge/client connection?"
         ),
+    ),
+    "uncomfortable_honesty": EvaluationCriterion(
+        name="Uncomfortable Honesty",
+        weight=0.15,
+        rubric={
+            10: "Raw honesty that most founders wouldn't share. Admitting failure, changing mind, calling out bullshit.",
+            8: "Real honesty with some vulnerability. Clear personal stake.",
+            6: "Honest but safe. Missing the uncomfortable edge.",
+            4: "Surface-level insights. Nothing that required courage to share.",
+            2: "Generic takes. Corporate-safe content.",
+        },
+        evaluation_prompt="Is there a confession, failure, or contrarian truth? Would this be scary to post?",
     ),
     "specificity": EvaluationCriterion(
         name="Specificity",
         weight=0.15,
         rubric={
-            10: "Concrete numbers, named companies/tools, specific examples throughout.",
-            8: "Good specificity with some concrete details.",
+            10: "Specific project, real numbers, named tools, what actually happened at Codebridge.",
+            8: "Good details with some concrete examples from Codebridge work.",
             6: "Mix of specific and vague. Some details, some generic statements.",
-            4: "Mostly vague. Few concrete examples.",
-            2: "Entirely abstract. No specific examples, numbers, or names.",
+            4: "Mostly vague. Few concrete examples from real work.",
+            2: "Entirely abstract. No specific Codebridge connection.",
         },
-        evaluation_prompt="Are there concrete numbers, names, and examples?",
+        evaluation_prompt="Are there concrete numbers, client stories, project details?",
     ),
     "value_density": EvaluationCriterion(
         name="Value Density",
-        weight=0.15,
+        weight=0.10,
         rubric={
-            10: "Every paragraph delivers actionable insight. No filler.",
+            10: "Every paragraph delivers insight. No filler. Reader can apply this.",
             8: "High value throughout with minimal fluff.",
             6: "Some valuable insights mixed with filler.",
             4: "More padding than substance.",
             2: "No actionable takeaways. Pure fluff.",
         },
-        evaluation_prompt="Does each paragraph add value? Are there actionable takeaways?",
+        evaluation_prompt="Does each paragraph add value? Actionable for the reader?",
     ),
     "authenticity": EvaluationCriterion(
         name="Authenticity",
-        weight=0.15,
+        weight=0.10,
         rubric={
-            10: "Unmistakably human. Unique voice, personal touches, natural flow.",
-            8: "Sounds human with minor AI tells.",
-            6: "Could be human or AI. Generic but not obviously artificial.",
-            4: "Some AI patterns visible. Overly formal or structured.",
-            2: "Obviously AI-generated. Robotic, formulaic, or uses AI phrases.",
+            10: "Rough edges, natural flow, passion visible. Not polished corporate speak.",
+            8: "Sounds human with energy and directness.",
+            6: "Could be more raw. Too smooth in places.",
+            4: "LinkedIn-smooth. Missing the pulse and tension.",
+            2: "Obviously AI or corporate. Robotic and formulaic.",
         },
-        evaluation_prompt="Does this sound like a real person wrote it?",
+        evaluation_prompt="Does it sound like 2am texting, not LinkedIn influencer?",
     ),
     "structure": EvaluationCriterion(
         name="Structure",
-        weight=0.10,
+        weight=0.05,
         rubric={
-            10: "Perfect scannability. White space, short paragraphs, clear flow.",
+            10: "Perfect scannability. Short paragraphs, white space, punchy sentences.",
             8: "Good structure, easy to read.",
-            6: "Acceptable structure but could be improved.",
-            4: "Hard to scan. Dense paragraphs.",
-            2: "Wall of text. No visual breaks.",
+            6: "Acceptable but could be tighter.",
+            4: "Dense paragraphs.",
+            2: "Wall of text.",
         },
-        evaluation_prompt="Is it easy to scan? Good use of white space?",
+        evaluation_prompt="Easy to scan? Good rhythm?",
     ),
     "cta_clarity": EvaluationCriterion(
         name="CTA Clarity",
         weight=0.05,
         rubric={
-            10: "Clear, natural call-to-action that invites engagement.",
-            8: "Good CTA, clear next step for reader.",
-            6: "CTA present but weak or generic.",
-            4: "Unclear what reader should do.",
+            10: "Natural CTA that feels like genuine curiosity, not engagement farming.",
+            8: "Good CTA, clear invitation to discuss.",
+            6: "CTA present but generic.",
+            4: "Weak ending.",
             2: "No CTA or abrupt ending.",
         },
-        evaluation_prompt="Is there a clear next step for the reader?",
+        evaluation_prompt="Does the ending invite real conversation?",
     ),
 }
 
