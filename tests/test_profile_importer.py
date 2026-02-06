@@ -27,7 +27,6 @@ class TestMediaExtraction:
         raw = {"commentary": {"text": "Hello world"}}
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "none"
-        assert result["visual_url"] == ""
         assert result["visual_urls"] == []
 
     def test_image_post(self, importer):
@@ -60,7 +59,6 @@ class TestMediaExtraction:
         }
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "image"
-        assert result["visual_url"] == "https://media.licdn.com/img_800.jpg"
         assert result["visual_urls"] == ["https://media.licdn.com/img_800.jpg"]
 
     def test_multi_image_post(self, importer):
@@ -99,7 +97,7 @@ class TestMediaExtraction:
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "image"
         assert len(result["visual_urls"]) == 3
-        assert result["visual_url"] == "https://media.licdn.com/img1.jpg"
+        assert result["visual_urls"][0] == "https://media.licdn.com/img1.jpg"
         assert result["visual_urls"][1] == "https://media.licdn.com/img2.jpg"
         assert result["visual_urls"][2] == "https://media.licdn.com/img3.jpg"
 
@@ -113,7 +111,7 @@ class TestMediaExtraction:
         }
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "video"
-        assert result["visual_url"] == ""
+        assert result["visual_urls"] == []
 
     def test_video_component_alt_key(self, importer):
         raw = {
@@ -136,7 +134,7 @@ class TestMediaExtraction:
         }
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "carousel"
-        assert result["visual_url"] == ""
+        assert result["visual_urls"] == []
 
     def test_article_post(self, importer):
         raw = {
@@ -162,7 +160,6 @@ class TestMediaExtraction:
         }
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "article"
-        assert result["visual_url"] == "https://media.licdn.com/article_1200.jpg"
         assert result["visual_urls"] == ["https://media.licdn.com/article_1200.jpg"]
 
     def test_empty_content_dict(self, importer):
@@ -190,7 +187,7 @@ class TestMediaExtraction:
         }
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "image"
-        assert result["visual_url"] == ""
+        assert result["visual_urls"] == []
 
     def test_image_missing_images(self, importer):
         raw = {
@@ -200,7 +197,7 @@ class TestMediaExtraction:
         }
         result = importer._extract_media_info(raw)
         assert result["visual_type"] == "image"
-        assert result["visual_url"] == ""
+        assert result["visual_urls"] == []
 
 
 # =========================================================================
@@ -219,7 +216,6 @@ class TestNormalizeLinkedInPost:
         }
         result = importer._normalize_linkedin_post(raw)
         assert result["visual_type"] == "none"
-        assert result["visual_url"] == ""
         assert result["visual_urls"] == []
         assert result["image_count"] == 0
         assert result["content_type"] == "text"
@@ -248,7 +244,6 @@ class TestNormalizeLinkedInPost:
         }
         result = importer._normalize_linkedin_post(raw)
         assert result["visual_type"] == "image"
-        assert result["visual_url"] == "https://cdn.licdn.com/pic.jpg"
         assert result["visual_urls"] == ["https://cdn.licdn.com/pic.jpg"]
         assert result["image_count"] == 1
         assert result["content_type"] == "image"
@@ -270,7 +265,7 @@ class TestNormalizeLinkedInPost:
         assert result["visual_type"] == "image"
         assert result["image_count"] == 3
         assert len(result["visual_urls"]) == 3
-        assert result["visual_url"] == "https://cdn.licdn.com/a.jpg"
+        assert result["visual_urls"][0] == "https://cdn.licdn.com/a.jpg"
 
     def test_video_post_content_type(self, importer):
         raw = {
@@ -295,17 +290,17 @@ class TestNormalizePost:
         post = {
             "text": "Some post",
             "visual_type": "image",
-            "visual_url": "/path/to/image.jpg",
+            "visual_urls": ["/path/to/image.jpg"],
         }
         result = importer._normalize_post(post)
         assert result["visual_type"] == "image"
-        assert result["visual_url"] == "/path/to/image.jpg"
+        assert result["visual_urls"] == ["/path/to/image.jpg"]
 
     def test_no_visual_fields_by_default(self, importer):
         post = {"text": "Just text"}
         result = importer._normalize_post(post)
         assert "visual_type" not in result
-        assert "visual_url" not in result
+        assert "visual_urls" not in result
 
 
 # =========================================================================
@@ -602,7 +597,7 @@ class TestDocumentExtraction:
         assert result["visual_type"] == "document"
         # Should pick highest resolution (width=1282)
         assert len(result["visual_urls"]) == 2
-        assert result["visual_url"] == "https://media.licdn.com/cover1_large.jpg"
+        assert result["visual_urls"][0] == "https://media.licdn.com/cover1_large.jpg"
         assert result["visual_urls"][1] == "https://media.licdn.com/cover2_large.jpg"
 
     def test_document_empty_component(self, importer):
@@ -677,7 +672,7 @@ class TestArticleExtraction:
         assert result["visual_type"] == "article"
         assert result["article_url"] == "https://example.com/my-article"
         assert result["article_title"] == "My Article Title"
-        assert result["visual_url"] == "https://media.licdn.com/art.jpg"
+        assert result["visual_urls"] == ["https://media.licdn.com/art.jpg"]
 
     def test_article_without_nav_context(self, importer):
         raw = {
@@ -749,7 +744,7 @@ class TestVideoExtraction:
         assert result["visual_type"] == "video"
         assert result["video_duration"] == 38800.0
         assert result["video_thumbnail"] == "https://media.licdn.com/videocover-high/thumb.jpg"
-        assert result["visual_url"] == "https://media.licdn.com/videocover-high/thumb.jpg"
+        assert result["visual_urls"] == ["https://media.licdn.com/videocover-high/thumb.jpg"]
 
     def test_video_without_metadata(self, importer):
         raw = {

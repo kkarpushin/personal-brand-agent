@@ -259,7 +259,7 @@ class ProfileImporter:
 
         # Pass through visual fields if present in input JSON
         _passthrough_str = [
-            "visual_type", "visual_url", "article_url", "article_title",
+            "visual_type", "article_url", "article_title",
             "document_title", "document_url", "video_thumbnail", "original_author",
         ]
         for field in _passthrough_str:
@@ -390,7 +390,6 @@ class ProfileImporter:
             "date": date,
             "content_type": media_info["visual_type"] if media_info["visual_type"] != "none" else "text",
             "visual_type": media_info["visual_type"],
-            "visual_url": media_info["visual_url"],
             "visual_urls": visual_urls,
             "image_count": len(visual_urls),
             # Article metadata
@@ -419,23 +418,31 @@ class ProfileImporter:
     # ------------------------------------------------------------------
 
     def _validate_posts(self, posts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Filter out posts with missing or empty text.
+        """Filter out posts with missing or empty text (except reshares).
+
+        Reshares without commentary are kept with empty text since they
+        still represent user activity.
 
         Args:
             posts: List of normalised post dicts.
 
         Returns:
-            Filtered list containing only posts with non-empty ``text``.
+            Filtered list containing posts with non-empty ``text`` or
+            reshares (even with empty text).
         """
         valid: List[Dict[str, Any]] = []
         skipped = 0
 
         for post in posts:
             text = post.get("text", "")
-            if not text or not text.strip():
+            is_reshare = post.get("is_reshare", False)
+            # Keep reshares even without text
+            if is_reshare:
+                valid.append(post)
+            elif text and text.strip():
+                valid.append(post)
+            else:
                 skipped += 1
-                continue
-            valid.append(post)
 
         if skipped > 0:
             logger.warning(
@@ -486,9 +493,6 @@ class ProfileImporter:
             visual_type = post.get("visual_type")
             if visual_type:
                 row["visual_type"] = visual_type
-            visual_url = post.get("visual_url")
-            if visual_url:
-                row["visual_url"] = visual_url
             visual_urls = post.get("visual_urls")
             if visual_urls:
                 row["visual_urls"] = visual_urls
@@ -590,7 +594,6 @@ class ProfileImporter:
         """
         result: Dict[str, Any] = {
             "visual_type": "none",
-            "visual_url": "",
             "visual_urls": [],
             "article_url": "",
             "article_title": "",
@@ -639,7 +642,6 @@ class ProfileImporter:
                     result["visual_urls"] = [img_url]
                 break
 
-        result["visual_url"] = result["visual_urls"][0] if result["visual_urls"] else ""
         return result
 
     @staticmethod
@@ -902,12 +904,7 @@ class ProfileImporter:
         for post in posts:
             urls = post.get("visual_urls", [])
             if not urls:
-                # Fallback for single-URL posts (e.g. from JSON import)
-                single = post.get("visual_url", "")
-                if single and single.startswith("http"):
-                    urls = [single]
-                else:
-                    continue
+                continue
 
             urn = post.get("linkedin_post_id", "")
             local_paths: List[str] = []
@@ -934,7 +931,6 @@ class ProfileImporter:
                     local_paths.append(url)  # keep CDN URL on failure
 
             post["visual_urls"] = local_paths
-            post["visual_url"] = local_paths[0] if local_paths else ""
             post["image_count"] = len(local_paths)
 
         return posts
