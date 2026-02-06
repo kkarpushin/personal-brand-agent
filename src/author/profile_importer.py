@@ -260,7 +260,7 @@ class ProfileImporter:
         # Pass through visual fields if present in input JSON
         _passthrough_str = [
             "visual_type", "visual_url", "article_url", "article_title",
-            "document_title", "document_url", "video_thumbnail",
+            "document_title", "document_url", "video_thumbnail", "original_author",
         ]
         for field in _passthrough_str:
             if field in post:
@@ -276,6 +276,8 @@ class ProfileImporter:
             normalized["video_duration"] = float(post["video_duration"])
         if "reactions_by_type" in post:
             normalized["reactions_by_type"] = dict(post["reactions_by_type"])
+        if "is_reshare" in post:
+            normalized["is_reshare"] = bool(post["is_reshare"])
 
         return normalized
 
@@ -365,6 +367,21 @@ class ProfileImporter:
 
         visual_urls = media_info["visual_urls"]
 
+        # Detect reshares (reposts of other users' content)
+        is_reshare = False
+        original_author = ""
+        reshared = raw.get("resharedUpdate")
+        if isinstance(reshared, dict):
+            is_reshare = True
+            # Extract original author name from resharedUpdate.actor
+            orig_actor = reshared.get("actor", {})
+            if isinstance(orig_actor, dict):
+                name_obj = orig_actor.get("name", {})
+                if isinstance(name_obj, dict):
+                    original_author = name_obj.get("text", "")
+                elif isinstance(name_obj, str):
+                    original_author = name_obj
+
         result: Dict[str, Any] = {
             "text": text,
             "likes": int(likes),
@@ -386,6 +403,9 @@ class ProfileImporter:
             # Video metadata
             "video_duration": media_info["video_duration"],
             "video_thumbnail": media_info["video_thumbnail"],
+            # Reshare metadata
+            "is_reshare": is_reshare,
+            "original_author": original_author,
         }
         if linkedin_post_id:
             result["linkedin_post_id"] = str(linkedin_post_id)
@@ -498,6 +518,14 @@ class ProfileImporter:
             reactions_by_type = post.get("reactions_by_type")
             if reactions_by_type:
                 row["reactions_by_type"] = reactions_by_type
+
+            # Reshare metadata
+            is_reshare = post.get("is_reshare")
+            if is_reshare:
+                row["is_reshare"] = True
+            original_author = post.get("original_author")
+            if original_author:
+                row["original_author"] = original_author
 
             db_rows.append(row)
 

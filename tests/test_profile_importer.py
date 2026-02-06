@@ -856,3 +856,60 @@ class TestSharesAndReactions:
         post = {"text": "Some post", "shares": 3}
         result = importer._normalize_post(post)
         assert result["shares"] == 3
+
+
+# =========================================================================
+# TestReshareExtraction — reshare detection and original author
+# =========================================================================
+
+class TestReshareExtraction:
+    """Tests for reshare (repost) detection and original author extraction."""
+
+    def test_reshare_detected(self, importer):
+        raw = {
+            "commentary": {"text": {"text": "Interesting"}},
+            "resharedUpdate": {
+                "actor": {
+                    "name": {"text": "John Doe"},
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["is_reshare"] is True
+        assert result["original_author"] == "John Doe"
+
+    def test_not_reshare(self, importer):
+        raw = {
+            "commentary": {"text": "My own post"},
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["is_reshare"] is False
+        assert result["original_author"] == ""
+
+    def test_reshare_with_string_name(self, importer):
+        raw = {
+            "commentary": {"text": {"text": "Great post!"}},
+            "resharedUpdate": {
+                "actor": {
+                    "name": "Jane Smith",
+                }
+            },
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["is_reshare"] is True
+        assert result["original_author"] == "Jane Smith"
+
+    def test_reshare_no_actor(self, importer):
+        raw = {
+            "commentary": {"text": {"text": "Check this"}},
+            "resharedUpdate": {},
+        }
+        result = importer._normalize_linkedin_post(raw)
+        assert result["is_reshare"] is True
+        assert result["original_author"] == ""
+
+    def test_normalize_post_passthrough(self, importer):
+        post = {"text": "Repost", "is_reshare": True, "original_author": "Bob"}
+        result = importer._normalize_post(post)
+        assert result["is_reshare"] is True
+        assert result["original_author"] == "Bob"
