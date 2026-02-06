@@ -171,6 +171,7 @@ AI_STRUCTURE_PATTERNS: List[str] = [
     r"(?:This|It) (?:is|remains) (?:important|crucial|essential|vital) to",
     r"(?:One|Another) (?:key|important|notable) (?:aspect|point|factor)",
     r"While (?:it is|it's) true that",
+    r"—",  # Em-dash is a strong AI tell, use regular dash instead
 ]
 
 # Author voice profile -- unique phrases the author uses
@@ -817,6 +818,11 @@ Return ONLY valid JSON, no markdown, no explanation."""
         ai_patterns_removed = response.get("ai_patterns_removed", [])
         human_markers_added = response.get("human_markers_added", [])
         type_adjustments = response.get("type_adjustments", [])
+
+        # Replace em-dashes with regular dashes (em-dash is a strong AI tell)
+        hook = hook.replace("—", "-").replace("–", "-")
+        body = body.replace("—", "-").replace("–", "-")
+        cta = cta.replace("—", "-").replace("–", "-")
 
         # Validate hook length constraint
         if len(hook) > 210:
