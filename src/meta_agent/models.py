@@ -987,7 +987,7 @@ class EvaluationCriterion:
 evaluation_rubric: Dict[str, EvaluationCriterion] = {
     "hook_strength": EvaluationCriterion(
         name="Hook Strength",
-        weight=0.25,
+        weight=0.20,
         rubric={
             10: "Impossible to scroll past. Creates immediate curiosity gap or emotional reaction.",
             8: "Strong hook that stops most readers. Clear value proposition.",
@@ -997,9 +997,24 @@ evaluation_rubric: Dict[str, EvaluationCriterion] = {
         },
         evaluation_prompt="Rate the first 2 lines. Do they stop the scroll?",
     ),
+    "simplicity": EvaluationCriterion(
+        name="Simplicity",
+        weight=0.20,
+        rubric={
+            10: "Crystal clear. Uses a vivid everyday analogy, zero unexplained jargon, anyone can understand.",
+            8: "Very accessible. One or two technical terms but explained well.",
+            6: "Somewhat accessible but relies on jargon or assumes technical knowledge.",
+            4: "Hard to follow without domain expertise. Few analogies or examples.",
+            2: "Reads like an academic abstract. Dense jargon, no simplification effort.",
+        },
+        evaluation_prompt=(
+            "Could a non-technical person understand this? "
+            "Is there a clear everyday analogy?"
+        ),
+    ),
     "specificity": EvaluationCriterion(
         name="Specificity",
-        weight=0.20,
+        weight=0.15,
         rubric={
             10: "Concrete numbers, named companies/tools, specific examples throughout.",
             8: "Good specificity with some concrete details.",
@@ -1011,7 +1026,7 @@ evaluation_rubric: Dict[str, EvaluationCriterion] = {
     ),
     "value_density": EvaluationCriterion(
         name="Value Density",
-        weight=0.20,
+        weight=0.15,
         rubric={
             10: "Every paragraph delivers actionable insight. No filler.",
             8: "High value throughout with minimal fluff.",
@@ -1047,7 +1062,7 @@ evaluation_rubric: Dict[str, EvaluationCriterion] = {
     ),
     "cta_clarity": EvaluationCriterion(
         name="CTA Clarity",
-        weight=0.10,
+        weight=0.05,
         rubric={
             10: "Clear, natural call-to-action that invites engagement.",
             8: "Good CTA, clear next step for reader.",

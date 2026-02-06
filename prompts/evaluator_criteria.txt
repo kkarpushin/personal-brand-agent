@@ -1,6 +1,6 @@
 === EVALUATION RUBRIC ===
 
-### Hook Strength (weight: 0.25)
+### Hook Strength (weight: 0.20)
 Question: Do the first 2 lines stop the scroll?
 10: Impossible to scroll past. Creates immediate curiosity gap or emotional reaction.
 8: Strong hook that stops most readers. Clear value proposition.
@@ -8,7 +8,15 @@ Question: Do the first 2 lines stop the scroll?
 4: Weak hook. Starts with background instead of punch.
 2: No hook. Buries the lede. Reader has no reason to continue.
 
-### Specificity (weight: 0.20)
+### Simplicity (weight: 0.20)
+Question: Could a non-technical person understand this? Is there a clear everyday analogy?
+10: Crystal clear. Uses a vivid analogy, zero unexplained jargon, anyone could understand it.
+8: Very accessible. One or two technical terms but explained well.
+6: Somewhat accessible but relies on jargon or assumes technical knowledge.
+4: Hard to follow without domain expertise. Few analogies or examples.
+2: Reads like an academic abstract. Dense jargon, no simplification effort.
+
+### Specificity (weight: 0.15)
 Question: Are there concrete numbers, names, and examples?
 10: Concrete numbers, named companies/tools, specific examples throughout.
 8: Good specificity with some concrete details.
@@ -16,7 +24,7 @@ Question: Are there concrete numbers, names, and examples?
 4: Mostly vague. Few concrete examples.
 2: Entirely abstract. No specific examples, numbers, or names.
 
-### Value Density (weight: 0.20)
+### Value Density (weight: 0.15)
 Question: Does each paragraph add value? Are there actionable takeaways?
 10: Every paragraph delivers actionable insight. No filler.
 8: High value throughout with minimal fluff.
@@ -40,7 +48,7 @@ Question: Is it easy to scan? Good use of white space?
 4: Hard to scan. Dense paragraphs.
 2: Wall of text. No visual breaks.
 
-### CTA Clarity (weight: 0.10)
+### CTA Clarity (weight: 0.05)
 Question: Is there a clear next step for the reader?
 10: Clear, natural call-to-action that invites engagement.
 8: Good CTA, clear next step for reader.

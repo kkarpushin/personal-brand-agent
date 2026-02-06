@@ -616,7 +616,9 @@ GENERATION_PROMPTS: Dict[ContentType, str] = {
         "Generate the complete LinkedIn post now. Return ONLY the post text."
     ),
     ContentType.PRIMARY_SOURCE: (
-        "Write a LinkedIn post about this research/paper.\n\n"
+        "Write a LinkedIn post explaining this research paper in EXTREMELY "
+        "simple language — as if you are explaining it to a curious 10-year-old "
+        "or a smart friend who knows nothing about AI.\n\n"
         "CONTENT TYPE: Primary Source (Research)\n"
         "TEMPLATE: {template_name}\n"
         "TEMPLATE STRUCTURE:\n{template_structure}\n\n"
@@ -626,15 +628,39 @@ GENERATION_PROMPTS: Dict[ContentType, str] = {
         "- Key Finding: {key_finding}\n"
         "- Implications: {implications}\n\n"
         "HOOKS (choose best or create variation):\n{hooks}\n\n"
-        "STYLE REQUIREMENTS:\n"
-        "- Make complex ideas accessible\n"
-        "- Credit the authors/source\n"
-        "- Show why this matters practically\n"
-        "- Invite intellectual engagement\n"
-        "- Balance confidence with humility\n\n"
+        "=== SIGNATURE STYLE: ELI5 RESEARCH BREAKDOWN ===\n"
+        "This is the author's trademark: taking dense academic papers and "
+        "making them dead simple. Follow these rules:\n\n"
+        "1. EVERYDAY ANALOGY FIRST: Open the explanation with a vivid, "
+        "everyday analogy that anyone can picture. Examples:\n"
+        '   - "Imagine you are reading a book but your eyes keep jumping '
+        'to the most interesting words. That is basically what attention does."\n'
+        '   - "Think of it like a GPS that recalculates not just when you '
+        'miss a turn, but learns which routes you personally prefer."\n'
+        "   The analogy should make the reader think 'Oh, THAT is what "
+        "this means.'\n\n"
+        "2. ZERO JARGON IN THE MAIN BODY: Replace every technical term with "
+        "a plain-language equivalent. If you must use a technical term, "
+        "immediately explain it in parentheses.\n"
+        "   - 'reinforcement learning' -> 'learning by trial and error'\n"
+        "   - 'attention mechanism' -> 'the part that decides what to focus on'\n"
+        "   - 'loss function' -> 'how the model measures its own mistakes'\n\n"
+        "3. ONE CONCRETE EXAMPLE: Include at least one 'here is what this "
+        "looks like in practice' scenario that grounds the research in "
+        "something real and tangible.\n\n"
+        "4. WHY SHOULD I CARE: Explicitly answer 'so what?' — why does "
+        "this matter for a person who builds products, runs a business, "
+        "or just uses technology daily?\n\n"
+        "5. PAPER LINK AT THE END: Close with something like "
+        "'The full paper is here: [source]. It gets more technical, but "
+        "the core idea is exactly what I described above.' This positions "
+        "the author as someone who reads the hard stuff so you don't have to.\n\n"
+        "6. TONE: Curious, excited, generous with knowledge. Not academic. "
+        "Not condescending. Like a smart friend who just read something "
+        "cool and can't wait to tell you about it.\n\n"
         "{constraints}\n\n"
         "- Length: {length_target}\n"
-        "- Simplification level: {complexity_level}\n"
+        "- Simplification level: maximum — write for a general audience\n"
         "- End with: {suggested_cta}\n\n"
         "STYLE GUIDE:\n"
         "Phrases to use: {phrases_to_use}\n"
@@ -815,7 +841,13 @@ class WriterAgent:
         try:
             response = await self.claude.generate(
                 prompt,
-                system="You are an expert LinkedIn content writer.",
+                system=(
+                    "You are an expert LinkedIn content writer. "
+                    "Your signature skill is explaining complex research "
+                    "in absurdly simple language — everyday analogies, "
+                    "zero jargon, vivid examples. You make people feel "
+                    "smart, not stupid."
+                ),
                 max_tokens=4096,
                 temperature=0.7,
             )
